@@ -125,7 +125,7 @@ func (m *mmapper) Mmap(fd int, offset int64, length int, prot int, flags int) (d
 		cap  int
 	}{addr, length, length}
 
-	// Use unsafeto turn sl into a []byte.
+	// Use unsafe to turn sl into a []byte.
 	b := *(*[]byte)(unsafe.Pointer(&sl))
 
 	// Register mapping in m and return it.
@@ -170,6 +170,30 @@ func Mmap(fd int, offset int64, length int, prot int, flags int) (data []byte, e
 
 func Munmap(b []byte) (err error) {
 	return mapper.Munmap(b)
+}
+
+// Do the interface allocations only once for common
+// Errno values.
+var (
+	errEAGAIN error = EAGAIN
+	errEINVAL error = EINVAL
+	errENOENT error = ENOENT
+)
+
+// errnoErr returns common boxed Errno values, to prevent
+// allocations at runtime.
+func errnoErr(e Errno) error {
+	switch e {
+	case 0:
+		return nil
+	case EAGAIN:
+		return errEAGAIN
+	case EINVAL:
+		return errEINVAL
+	case ENOENT:
+		return errENOENT
+	}
+	return e
 }
 
 // A Signal is a number describing a process signal.

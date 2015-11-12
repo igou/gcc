@@ -1,5 +1,5 @@
 /* Utility routines for data type conversion for GCC.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -24,13 +24,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "tree.h"
-#include "stor-layout.h"
-#include "flags.h"
-#include "convert.h"
-#include "diagnostic-core.h"
 #include "target.h"
+#include "tree.h"
+#include "diagnostic-core.h"
+#include "fold-const.h"
+#include "stor-layout.h"
+#include "convert.h"
 #include "langhooks.h"
 #include "builtins.h"
 #include "ubsan.h"
@@ -221,37 +220,6 @@ convert_to_real (tree type, tree expr)
 	    }
 	default:
 	  break;
-	}
-    }
-  if (optimize
-      && (((fcode == BUILT_IN_FLOORL
-	   || fcode == BUILT_IN_CEILL
-	   || fcode == BUILT_IN_ROUNDL
-	   || fcode == BUILT_IN_RINTL
-	   || fcode == BUILT_IN_TRUNCL
-	   || fcode == BUILT_IN_NEARBYINTL)
-	  && (TYPE_MODE (type) == TYPE_MODE (double_type_node)
-	      || TYPE_MODE (type) == TYPE_MODE (float_type_node)))
-	  || ((fcode == BUILT_IN_FLOOR
-	       || fcode == BUILT_IN_CEIL
-	       || fcode == BUILT_IN_ROUND
-	       || fcode == BUILT_IN_RINT
-	       || fcode == BUILT_IN_TRUNC
-	       || fcode == BUILT_IN_NEARBYINT)
-	      && (TYPE_MODE (type) == TYPE_MODE (float_type_node)))))
-    {
-      tree fn = mathfn_built_in (type, fcode);
-
-      if (fn)
-	{
-	  tree arg = strip_float_extensions (CALL_EXPR_ARG (expr, 0));
-
-	  /* Make sure (type)arg0 is an extension, otherwise we could end up
-	     changing (float)floor(double d) into floorf((float)d), which is
-	     incorrect because (float)d uses round-to-nearest and can round
-	     up to the next integer.  */
-	  if (TYPE_PRECISION (type) >= TYPE_PRECISION (TREE_TYPE (arg)))
-	    return build_call_expr (fn, 1, fold (convert_to_real (type, arg)));
 	}
     }
 
@@ -885,12 +853,10 @@ convert_to_integer (tree type, tree expr)
 
     case REAL_TYPE:
       if (flag_sanitize & SANITIZE_FLOAT_CAST
-	  && current_function_decl != NULL_TREE
-	  && !lookup_attribute ("no_sanitize_undefined",
-				DECL_ATTRIBUTES (current_function_decl)))
+	  && do_ubsan_in_current_function ())
 	{
 	  expr = save_expr (expr);
-	  tree check = ubsan_instrument_float_cast (loc, type, expr);
+	  tree check = ubsan_instrument_float_cast (loc, type, expr, expr);
 	  expr = build1 (FIX_TRUNC_EXPR, type, expr);
 	  if (check == NULL)
 	    return expr;
@@ -910,7 +876,9 @@ convert_to_integer (tree type, tree expr)
     case VECTOR_TYPE:
       if (!tree_int_cst_equal (TYPE_SIZE (type), TYPE_SIZE (TREE_TYPE (expr))))
 	{
-	  error ("can%'t convert between vector values of different size");
+	  error ("can%'t convert a vector of type %qT"
+		 " to type %qT which has different size",
+		 TREE_TYPE (expr), type);
 	  return error_mark_node;
 	}
       return build1 (VIEW_CONVERT_EXPR, type, expr);
@@ -994,7 +962,9 @@ convert_to_vector (tree type, tree expr)
     case VECTOR_TYPE:
       if (!tree_int_cst_equal (TYPE_SIZE (type), TYPE_SIZE (TREE_TYPE (expr))))
 	{
-	  error ("can%'t convert between vector values of different size");
+	  error ("can%'t convert a value of type %qT"
+		 " to vector type %qT which has different size",
+		 TREE_TYPE (expr), type);
 	  return error_mark_node;
 	}
       return build1 (VIEW_CONVERT_EXPR, type, expr);

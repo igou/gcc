@@ -1,6 +1,6 @@
 /* Routines for emitting GIMPLE to a file stream.
 
-   Copyright (C) 2011-2014 Free Software Foundation, Inc.
+   Copyright (C) 2011-2015 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -22,33 +22,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "backend.h"
 #include "tree.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "tm.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "basic-block.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "tree-eh.h"
-#include "gimple-expr.h"
-#include "is-a.h"
 #include "gimple.h"
-#include "gimple-iterator.h"
 #include "gimple-ssa.h"
-#include "hash-map.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
-#include "data-streamer.h"
 #include "gimple-streamer.h"
-#include "lto-streamer.h"
-#include "tree-streamer.h"
+#include "tree-eh.h"
+#include "gimple-iterator.h"
+#include "cgraph.h"
 #include "value-prof.h"
 
 /* Output PHI function PHI to the main stream in OB.  */
@@ -75,7 +56,7 @@ output_phi (struct output_block *ob, gphi *phi)
 /* Emit statement STMT on the main stream of output block OB.  */
 
 static void
-output_gimple_stmt (struct output_block *ob, gimple stmt)
+output_gimple_stmt (struct output_block *ob, gimple *stmt)
 {
   unsigned i;
   enum gimple_code code;
@@ -237,7 +218,7 @@ output_bb (struct output_block *ob, basic_block bb, struct function *fn)
       for (bsi = gsi_start_bb (bb); !gsi_end_p (bsi); gsi_next (&bsi))
 	{
 	  int region;
-	  gimple stmt = gsi_stmt (bsi);
+	  gimple *stmt = gsi_stmt (bsi);
 
 	  output_gimple_stmt (ob, stmt);
 

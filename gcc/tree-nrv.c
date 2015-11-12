@@ -1,5 +1,5 @@
 /* Language independent return value optimizations
-   Copyright (C) 2004-2014 Free Software Foundation, Inc.
+   Copyright (C) 2004-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,35 +20,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
 #include "tree.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "predict.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "basic-block.h"
-#include "tree-pretty-print.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "gimple-expr.h"
-#include "is-a.h"
 #include "gimple.h"
+#include "tree-pass.h"
+#include "ssa.h"
+#include "tree-pretty-print.h"
 #include "gimple-iterator.h"
 #include "gimple-walk.h"
-#include "gimple-ssa.h"
-#include "stringpool.h"
-#include "tree-ssanames.h"
-#include "tree-pass.h"
-#include "langhooks.h"
-#include "flags.h"	/* For "optimize" in gate_pass_return_slot.
-			   FIXME: That should be up to the pass manager,
-			   but pass_nrv is not in pass_all_optimizations.  */
 
 /* This file implements return value optimizations for functions which
    return aggregate types.
@@ -186,7 +165,7 @@ pass_nrv::execute (function *fun)
     {
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
 	{
-	  gimple stmt = gsi_stmt (gsi);
+	  gimple *stmt = gsi_stmt (gsi);
 	  tree ret_val;
 
 	  if (greturn *return_stmt = dyn_cast <greturn *> (stmt))
@@ -279,7 +258,7 @@ pass_nrv::execute (function *fun)
     {
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); )
 	{
-	  gimple stmt = gsi_stmt (gsi);
+	  gimple *stmt = gsi_stmt (gsi);
 	  /* If this is a copy from VAR to RESULT, remove it.  */
 	  if (gimple_assign_copy_p (stmt)
 	      && gimple_assign_lhs (stmt) == result

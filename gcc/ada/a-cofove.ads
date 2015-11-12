@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2004-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 2004-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- This specification is derived from the Ada Reference Manual for use with --
 -- GNAT. The copyright notice above, and the license provisions that follow --
@@ -50,6 +50,7 @@ package Ada.Containers.Formal_Vectors with
   SPARK_Mode
 is
    pragma Annotate (GNATprove, External_Axiomatization);
+   pragma Annotate (CodePeer, Skip_Analysis);
 
    subtype Extended_Index is Index_Type'Base
    range Index_Type'First - 1 ..
@@ -61,7 +62,7 @@ is
      Count_Type range 0 .. Count_Type (Index_Type'Last - Index_Type'First + 1);
 
    type Vector (Capacity : Capacity_Range) is limited private with
-     Default_Initial_Condition;
+     Default_Initial_Condition => Is_Empty (Vector);
    --  In the bounded case, Capacity is the capacity of the container, which
    --  never changes. In the unbounded case, Capacity is the initial capacity
    --  of the container, and operations such as Reserve_Capacity and Append can
@@ -84,7 +85,8 @@ is
      Global => null;
 
    function Capacity (Container : Vector) return Capacity_Range with
-     Global => null;
+     Global => null,
+     Post => Capacity'Result >= Container.Capacity;
 
    procedure Reserve_Capacity
      (Container : in out Vector;
@@ -202,7 +204,7 @@ is
 
    generic
       with function "<" (Left, Right : Element_Type) return Boolean is <>;
-   package Generic_Sorting is
+   package Generic_Sorting with SPARK_Mode is
 
       function Is_Sorted (Container : Vector) return Boolean with
         Global => null;
@@ -246,7 +248,8 @@ private
    pragma Inline (Replace_Element);
    pragma Inline (Contains);
 
-   type Elements_Array is array (Capacity_Range range <>) of Element_Type;
+   subtype Array_Index is Capacity_Range range 1 .. Capacity_Range'Last;
+   type Elements_Array is array (Array_Index range <>) of Element_Type;
    function "=" (L, R : Elements_Array) return Boolean is abstract;
 
    type Elements_Array_Ptr is access all Elements_Array;

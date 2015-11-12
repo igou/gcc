@@ -1,5 +1,5 @@
 /* Wrapper to call lto.  Used by collect2 and the linker plugin.
-   Copyright (C) 2009-2014 Free Software Foundation, Inc.
+   Copyright (C) 2009-2015 Free Software Foundation, Inc.
 
    Factored out of collect2 by Rafael Espindola <espindola@google.com>
 
@@ -109,7 +109,7 @@ maybe_unlink (const char *file)
     {
       if (unlink_if_ordinary (file)
 	  && errno != ENOENT)
-	fatal_error ("deleting LTRANS file %s: %m", file);
+	fatal_error (input_location, "deleting LTRANS file %s: %m", file);
     }
   else if (verbose)
     fprintf (stderr, "[Leaving LTRANS %s]\n", file);
@@ -146,7 +146,7 @@ get_options_from_collect_gcc_options (const char *collect_gcc,
 	  do
 	    {
 	      if (argv_storage[j] == '\0')
-		fatal_error ("malformed COLLECT_GCC_OPTIONS");
+		fatal_error (input_location, "malformed COLLECT_GCC_OPTIONS");
 	      else if (strncmp (&argv_storage[j], "'\\''", 4) == 0)
 		{
 		  argv_storage[k++] = '\'';
@@ -232,6 +232,10 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	    break;
 
 	  /* Fallthru.  */
+	case OPT_fdiagnostics_show_caret:
+	case OPT_fdiagnostics_show_option:
+	case OPT_fdiagnostics_show_location_:
+	case OPT_fshow_column:
 	case OPT_fPIC:
 	case OPT_fpic:
 	case OPT_fPIE:
@@ -271,6 +275,9 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	case OPT_fsigned_zeros:
 	case OPT_ftrapping_math:
 	case OPT_fwrapv:
+	case OPT_fopenmp:
+	case OPT_fopenacc:
+	case OPT_fcheck_pointer_bounds:
 	  /* For selected options we can merge conservatively.  */
 	  for (j = 0; j < *decoded_options_count; ++j)
 	    if ((*decoded_options)[j].opt_index == foption->opt_index)
@@ -292,7 +299,8 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	    if ((*decoded_options)[j].opt_index == foption->opt_index)
 	      break;
 	  if (j == *decoded_options_count)
-	    fatal_error ("Option %s not used consistently in all LTO input"
+	    fatal_error (input_location,
+			 "Option %s not used consistently in all LTO input"
 			 " files", foption->orig_option_with_args_text);
 	  break;
 
@@ -300,12 +308,13 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	  for (j = 0; j < *decoded_options_count; ++j)
 	    if ((*decoded_options)[j].opt_index == foption->opt_index)
 	      break;
-	    if (j == *decoded_options_count)
-	      append_option (decoded_options, decoded_options_count, foption);
-	    else if (foption->value != (*decoded_options)[j].value)
-	      fatal_error ("Option %s not used consistently in all LTO input"
-			   " files", foption->orig_option_with_args_text);
-	    break;
+	  if (j == *decoded_options_count)
+	    append_option (decoded_options, decoded_options_count, foption);
+	  else if (foption->value != (*decoded_options)[j].value)
+	    fatal_error (input_location,
+			 "Option %s not used consistently in all LTO input"
+			 " files", foption->orig_option_with_args_text);
+	  break;
 
 	case OPT_O:
 	case OPT_Ofast:
@@ -371,7 +380,7 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 		}
 	      (*decoded_options)[j].opt_index = OPT_O;
 	      char *tem;
-	      asprintf (&tem, "-O%d", level);
+	      tem = xasprintf ("-O%d", level);
 	      (*decoded_options)[j].arg = &tem[2];
 	      (*decoded_options)[j].canonical_option[0] = tem;
 	      (*decoded_options)[j].value = 1;
@@ -474,6 +483,10 @@ append_compiler_options (obstack *argv_obstack, struct cl_decoded_option *opts,
 	 on any CL_TARGET flag and a few selected others.  */
       switch (option->opt_index)
 	{
+	case OPT_fdiagnostics_show_caret:
+	case OPT_fdiagnostics_show_option:
+	case OPT_fdiagnostics_show_location_:
+	case OPT_fshow_column:
 	case OPT_fPIC:
 	case OPT_fpic:
 	case OPT_fPIE:
@@ -490,6 +503,8 @@ append_compiler_options (obstack *argv_obstack, struct cl_decoded_option *opts,
 	case OPT_fsigned_zeros:
 	case OPT_ftrapping_math:
 	case OPT_fwrapv:
+	case OPT_fopenmp:
+	case OPT_fopenacc:
 	case OPT_ftrapv:
 	case OPT_fstrict_overflow:
 	case OPT_foffload_abi_:
@@ -497,6 +512,7 @@ append_compiler_options (obstack *argv_obstack, struct cl_decoded_option *opts,
 	case OPT_Ofast:
 	case OPT_Og:
 	case OPT_Os:
+	case OPT_fcheck_pointer_bounds:
 	  break;
 
 	default:
@@ -578,6 +594,8 @@ append_offload_options (obstack *argv_obstack, const char *target,
       else
 	{
 	  opts = strchr (option->arg, '=');
+	  /* If there are offload targets specified, but no actual options,
+	     there is nothing to do here.  */
 	  if (!opts)
 	    continue;
 
@@ -590,10 +608,12 @@ append_offload_options (obstack *argv_obstack, const char *target,
 		next = opts;
 	      next = (next > opts) ? opts : next;
 
+	      /* Are we looking for this offload target?  */
 	      if (strlen (target) == (size_t) (next - cur)
 		  && strncmp (target, cur, next - cur) == 0)
 		break;
 
+	      /* Skip the comma or equal sign.  */
 	      cur = next + 1;
 	    }
 
@@ -665,6 +685,10 @@ compile_offload_image (const char *target, const char *compiler_path,
       struct obstack argv_obstack;
       obstack_init (&argv_obstack);
       obstack_ptr_grow (&argv_obstack, compiler);
+      if (save_temps)
+	obstack_ptr_grow (&argv_obstack, "-save-temps");
+      if (verbose)
+	obstack_ptr_grow (&argv_obstack, "-v");
       obstack_ptr_grow (&argv_obstack, "-o");
       obstack_ptr_grow (&argv_obstack, filename);
 
@@ -726,7 +750,8 @@ compile_images_for_offload_targets (unsigned in_argc, char *in_argv[],
 				 compiler_opts, compiler_opt_count,
 				 linker_opts, linker_opt_count);
       if (!offload_names[i])
-	fatal_error ("problem with building target image for %s\n", names[i]);
+	fatal_error (input_location,
+		     "problem with building target image for %s\n", names[i]);
     }
 
  out:
@@ -745,12 +770,12 @@ copy_file (const char *dest, const char *src)
     {
       size_t len = fread (buffer, 1, 512, s);
       if (ferror (s) != 0)
-	fatal_error ("reading input file");
+	fatal_error (input_location, "reading input file");
       if (len > 0)
 	{
 	  fwrite (buffer, 1, len, d);
 	  if (ferror (d) != 0)
-	    fatal_error ("writing output file");
+	    fatal_error (input_location, "writing output file");
 	}
     }
 }
@@ -775,7 +800,8 @@ find_offloadbeginend (void)
 	char *tmp = xstrdup (paths[i]);
 	strcpy (paths[i] + len - strlen ("begin.o"), "end.o");
 	if (access_check (paths[i], R_OK) != 0)
-	  fatal_error ("installation error, can't find crtoffloadend.o");
+	  fatal_error (input_location,
+		       "installation error, can't find crtoffloadend.o");
 	/* The linker will delete the filenames we give it, so make
 	   copies.  */
 	offloadbegin = make_temp_file (".o");
@@ -786,7 +812,8 @@ find_offloadbeginend (void)
 	break;
       }
   if (i == n_paths)
-    fatal_error ("installation error, can't find crtoffloadbegin.o");
+    fatal_error (input_location,
+		 "installation error, can't find crtoffloadbegin.o");
 
   free_array_of_ptrs ((void **) paths, n_paths);
 }
@@ -889,10 +916,12 @@ run_gcc (unsigned argc, char *argv[])
   /* Get the driver and options.  */
   collect_gcc = getenv ("COLLECT_GCC");
   if (!collect_gcc)
-    fatal_error ("environment variable COLLECT_GCC must be set");
+    fatal_error (input_location,
+		 "environment variable COLLECT_GCC must be set");
   collect_gcc_options = getenv ("COLLECT_GCC_OPTIONS");
   if (!collect_gcc_options)
-    fatal_error ("environment variable COLLECT_GCC_OPTIONS must be set");
+    fatal_error (input_location,
+		 "environment variable COLLECT_GCC_OPTIONS must be set");
   get_options_from_collect_gcc_options (collect_gcc, collect_gcc_options,
 					CL_LANG_ALL,
 					&decoded_options,
@@ -923,7 +952,7 @@ run_gcc (unsigned argc, char *argv[])
 	  filename[p - argv[i]] = '\0';
 	  file_offset = (off_t) loffset;
 	}
-      fd = open (argv[i], O_RDONLY);
+      fd = open (filename, O_RDONLY | O_BINARY);
       if (fd == -1)
 	{
 	  lto_argv[lto_argc++] = argv[i];
@@ -1158,7 +1187,7 @@ run_gcc (unsigned argc, char *argv[])
       struct obstack env_obstack;
 
       if (!stream)
-	fatal_error ("fopen: %s: %m", ltrans_output_file);
+	fatal_error (input_location, "fopen: %s: %m", ltrans_output_file);
 
       /* Parse the list of LTRANS inputs from the WPA stage.  */
       obstack_init (&env_obstack);
@@ -1340,7 +1369,7 @@ main (int argc, char *argv[])
   diagnostic_initialize (global_dc, 0);
 
   if (atexit (lto_wrapper_cleanup) != 0)
-    fatal_error ("atexit failed");
+    fatal_error (input_location, "atexit failed");
 
   if (signal (SIGINT, SIG_IGN) != SIG_IGN)
     signal (SIGINT, fatal_signal);

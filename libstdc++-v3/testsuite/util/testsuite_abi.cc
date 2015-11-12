@@ -1,6 +1,6 @@
 // -*- C++ -*-
 
-// Copyright (C) 2004-2014 Free Software Foundation, Inc.
+// Copyright (C) 2004-2015 Free Software Foundation, Inc.
 
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License as
@@ -201,6 +201,8 @@ check_version(symbol& test, bool added)
       known_versions.push_back("GLIBCXX_3.4.19");
       known_versions.push_back("GLIBCXX_3.4.20");
       known_versions.push_back("GLIBCXX_3.4.21");
+      known_versions.push_back("GLIBCXX_3.4.22");
+      known_versions.push_back("GLIBCXX_LDBL_3.4.21");
       known_versions.push_back("CXXABI_1.3");
       known_versions.push_back("CXXABI_LDBL_1.3");
       known_versions.push_back("CXXABI_1.3.1");
@@ -229,7 +231,7 @@ check_version(symbol& test, bool added)
 	test.version_status = symbol::incompatible;
 
       // Check that added symbols are added in the latest pre-release version.
-      bool latestp = (test.version_name == "GLIBCXX_3.4.21"
+      bool latestp = (test.version_name == "GLIBCXX_3.4.22"
 		     || test.version_name == "CXXABI_1.3.9"
 		     || test.version_name == "CXXABI_FLOAT128"
 		     || test.version_name == "CXXABI_TM_1");
@@ -239,7 +241,8 @@ check_version(symbol& test, bool added)
       // Check that long double compatibility symbols demangled as
       // __float128 and regular __float128 symbols are put into some _LDBL_
       // or _FLOAT128 version name.
-      if (added && test.demangled_name.find("__float128") != std::string::npos)
+      if (added && test.demangled_name.find("__float128") != std::string::npos
+	  && test.demangled_name.find("std::__cxx11::") != 0)
 	{
 	  if (test.version_name.find("_LDBL_") == std::string::npos
 	      && test.version_name.find("_FLOAT128") == std::string::npos)

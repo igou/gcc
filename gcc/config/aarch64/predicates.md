@@ -1,5 +1,5 @@
 ;; Machine description for AArch64 architecture.
-;; Copyright (C) 2009-2014 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2015 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 ;;
 ;; This file is part of GCC.
@@ -32,7 +32,7 @@
 
 ;; Return true if OP a (const_int 0) operand.
 (define_predicate "const0_operand"
-  (and (match_code "const_int, const_double")
+  (and (match_code "const_int")
        (match_test "op == CONST0_RTX (mode)")))
 
 (define_predicate "aarch64_ccmp_immediate"
@@ -86,6 +86,13 @@
   (ior (match_operand 0 "register_operand")
        (and (match_code "const_double")
 	    (match_test "aarch64_float_const_zero_rtx_p (op)"))))
+
+(define_predicate "aarch64_fp_pow2"
+  (and (match_code "const_double")
+	(match_test "aarch64_fpconst_pow_of_2 (op) > 0")))
+
+(define_predicate "aarch64_fp_vec_pow2"
+  (match_test "aarch64_vec_fpconst_pow_of_2 (op) > 0"))
 
 (define_predicate "aarch64_plus_immediate"
   (and (match_code "const_int")
@@ -165,7 +172,7 @@
 (define_predicate "aarch64_valid_symref"
   (match_code "const, symbol_ref, label_ref")
 {
-  return (aarch64_classify_symbolic_expression (op, SYMBOL_CONTEXT_ADR)
+  return (aarch64_classify_symbolic_expression (op)
 	  != SYMBOL_FORCE_TO_MEM);
 })
 
@@ -215,7 +222,7 @@
   (and (match_code "reg,subreg,mem,const,const_int,symbol_ref,label_ref,high")
        (ior (match_operand 0 "register_operand")
 	    (ior (match_operand 0 "memory_operand")
-		 (match_test "aarch64_mov_operand_p (op, SYMBOL_CONTEXT_ADR, mode)")))))
+		 (match_test "aarch64_mov_operand_p (op, mode)")))))
 
 (define_predicate "aarch64_movti_operand"
   (and (match_code "reg,subreg,mem,const_int")
@@ -362,3 +369,7 @@
 (define_predicate "aarch64_simd_shift_imm_bitsize_di"
   (and (match_code "const_int")
        (match_test "IN_RANGE (INTVAL (op), 0, 64)")))
+
+(define_predicate "aarch64_constant_pool_symref"
+   (and (match_code "symbol_ref")
+	(match_test "CONSTANT_POOL_ADDRESS_P (op)")))

@@ -1,5 +1,5 @@
 /* Output VMS debug format symbol table information from GCC.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
    Contributed by Douglas B. Rupp (rupp@gnat.com).
    Updated by Bernard W. Giroud (bgiroud@users.sourceforge.net).
 
@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 
 #ifdef VMS_DEBUGGING_INFO
+#include "alias.h"
 #include "tree.h"
 #include "varasm.h"
 #include "version.h"
@@ -34,12 +35,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "vmsdbg.h"
 #include "debug.h"
 #include "langhooks.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
 #include "function.h"
 #include "target.h"
 
@@ -168,8 +163,9 @@ static void vmsdbgout_end_function (unsigned int);
 static void vmsdbgout_begin_epilogue (unsigned int, const char *);
 static void vmsdbgout_end_epilogue (unsigned int, const char *);
 static void vmsdbgout_begin_function (tree);
-static void vmsdbgout_decl (tree);
-static void vmsdbgout_global_decl (tree);
+static void vmsdbgout_function_decl (tree);
+static void vmsdbgout_early_global_decl (tree);
+static void vmsdbgout_late_global_decl (tree);
 static void vmsdbgout_type_decl (tree, int);
 static void vmsdbgout_abstract_function (tree);
 
@@ -178,6 +174,7 @@ static void vmsdbgout_abstract_function (tree);
 const struct gcc_debug_hooks vmsdbg_debug_hooks
 = {vmsdbgout_init,
    vmsdbgout_finish,
+   debug_nothing_void,
    vmsdbgout_assembly_start,
    vmsdbgout_define,
    vmsdbgout_undef,
@@ -193,8 +190,10 @@ const struct gcc_debug_hooks vmsdbg_debug_hooks
    vmsdbgout_end_epilogue,
    vmsdbgout_begin_function,
    vmsdbgout_end_function,
-   vmsdbgout_decl,
-   vmsdbgout_global_decl,
+   debug_nothing_tree,		  /* register_main_translation_unit */
+   vmsdbgout_function_decl,
+   vmsdbgout_early_global_decl,
+   vmsdbgout_late_global_decl,
    vmsdbgout_type_decl,		  /* type_decl */
    debug_nothing_tree_tree_tree_bool, /* imported_module_or_decl */
    debug_nothing_tree,		  /* deferred_inline_function */
@@ -1507,7 +1506,7 @@ vmsdbgout_undef (unsigned int lineno, const char *buffer)
 /* Not implemented in VMS Debug.  */
 
 static void
-vmsdbgout_decl (tree decl)
+vmsdbgout_function_decl (tree decl)
 {
   if (write_symbols == VMS_AND_DWARF2_DEBUG)
     (*dwarf2_debug_hooks.function_decl) (decl);
@@ -1516,10 +1515,19 @@ vmsdbgout_decl (tree decl)
 /* Not implemented in VMS Debug.  */
 
 static void
-vmsdbgout_global_decl (tree decl)
+vmsdbgout_early_global_decl (tree decl)
 {
   if (write_symbols == VMS_AND_DWARF2_DEBUG)
-    (*dwarf2_debug_hooks.global_decl) (decl);
+    (*dwarf2_debug_hooks.early_global_decl) (decl);
+}
+
+/* Not implemented in VMS Debug.  */
+
+static void
+vmsdbgout_late_global_decl (tree decl)
+{
+  if (write_symbols == VMS_AND_DWARF2_DEBUG)
+    (*dwarf2_debug_hooks.late_global_decl) (decl);
 }
 
 /* Not implemented in VMS Debug.  */

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -507,4 +508,100 @@ func rZipBytes() []byte {
 func returnRecursiveZip() (r io.ReaderAt, size int64) {
 	b := rZipBytes()
 	return bytes.NewReader(b), int64(len(b))
+}
+
+func TestIssue8186(t *testing.T) {
+	// Directory headers & data found in the TOC of a JAR file.
+	dirEnts := []string{
+		"PK\x01\x02\n\x00\n\x00\x00\b\x00\x004\x9d3?\xaa\x1b\x06\xf0\x81\x02\x00\x00\x81\x02\x00\x00-\x00\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00res/drawable-xhdpi-v4/ic_actionbar_accept.png\xfe\xca\x00\x00\x00",
+		"PK\x01\x02\n\x00\n\x00\x00\b\x00\x004\x9d3?\x90K\x89\xc7t\n\x00\x00t\n\x00\x00\x0e\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xd1\x02\x00\x00resources.arsc\x00\x00\x00",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?\xff$\x18\xed3\x03\x00\x00\xb4\b\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00t\r\x00\x00AndroidManifest.xml",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?\x14\xc5K\xab\x192\x02\x00\xc8\xcd\x04\x00\v\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xe8\x10\x00\x00classes.dex",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?E\x96\nD\xac\x01\x00\x00P\x03\x00\x00&\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00:C\x02\x00res/layout/actionbar_set_wallpaper.xml",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?Ļ\x14\xe3\xd8\x01\x00\x00\xd8\x03\x00\x00 \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00:E\x02\x00res/layout/wallpaper_cropper.xml",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?}\xc1\x15\x9eZ\x01\x00\x00!\x02\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00`G\x02\x00META-INF/MANIFEST.MF",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?\xe6\x98Ьo\x01\x00\x00\x84\x02\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfcH\x02\x00META-INF/CERT.SF",
+		"PK\x01\x02\x14\x00\x14\x00\b\b\b\x004\x9d3?\xbfP\x96b\x86\x04\x00\x00\xb2\x06\x00\x00\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa9J\x02\x00META-INF/CERT.RSA",
+	}
+	for i, s := range dirEnts {
+		var f File
+		err := readDirectoryHeader(&f, strings.NewReader(s))
+		if err != nil {
+			t.Errorf("error reading #%d: %v", i, err)
+		}
+	}
+}
+
+// Verify we return ErrUnexpectedEOF when length is short.
+func TestIssue10957(t *testing.T) {
+	data := []byte("PK\x03\x040000000PK\x01\x0200000" +
+		"0000000000000000000\x00" +
+		"\x00\x00\x00\x00\x00000000000000PK\x01" +
+		"\x020000000000000000000" +
+		"00000\v\x00\x00\x00\x00\x00000000000" +
+		"00000000000000PK\x01\x0200" +
+		"00000000000000000000" +
+		"00\v\x00\x00\x00\x00\x00000000000000" +
+		"00000000000PK\x01\x020000<" +
+		"0\x00\x0000000000000000\v\x00\v" +
+		"\x00\x00\x00\x00\x0000000000\x00\x00\x00\x00000" +
+		"00000000PK\x01\x0200000000" +
+		"0000000000000000\v\x00\x00\x00" +
+		"\x00\x0000PK\x05\x06000000\x05\x000000" +
+		"\v\x00\x00\x00\x00\x00")
+	z, err := NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range z.File {
+		r, err := f.Open()
+		if err != nil {
+			continue
+		}
+		if f.UncompressedSize64 < 1e6 {
+			n, err := io.Copy(ioutil.Discard, r)
+			if i == 3 && err != io.ErrUnexpectedEOF {
+				t.Errorf("File[3] error = %v; want io.ErrUnexpectedEOF", err)
+			}
+			if err == nil && uint64(n) != f.UncompressedSize64 {
+				t.Errorf("file %d: bad size: copied=%d; want=%d", i, n, f.UncompressedSize64)
+			}
+		}
+		r.Close()
+	}
+}
+
+// Verify the number of files is sane.
+func TestIssue10956(t *testing.T) {
+	data := []byte("PK\x06\x06PK\x06\a0000\x00\x00\x00\x00\x00\x00\x00\x00" +
+		"0000PK\x05\x06000000000000" +
+		"0000\v\x00000\x00\x00\x00\x00\x00\x00\x000")
+	_, err := NewReader(bytes.NewReader(data), int64(len(data)))
+	const want = "TOC declares impossible 3472328296227680304 files in 57 byte"
+	if err == nil && !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v; want %q", err, want)
+	}
+}
+
+// Verify we return ErrUnexpectedEOF when reading truncated data descriptor.
+func TestIssue11146(t *testing.T) {
+	data := []byte("PK\x03\x040000000000000000" +
+		"000000\x01\x00\x00\x000\x01\x00\x00\xff\xff0000" +
+		"0000000000000000PK\x01\x02" +
+		"0000\b0\b\x00000000000000" +
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x000000PK\x05\x06\x00\x00" +
+		"\x00\x0000\x01\x0000008\x00\x00\x00\x00\x00")
+	z, err := NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := z.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ioutil.ReadAll(r)
+	if err != io.ErrUnexpectedEOF {
+		t.Errorf("File[0] error = %v; want io.ErrUnexpectedEOF", err)
+	}
+	r.Close()
 }

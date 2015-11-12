@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2010-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 2010-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -33,7 +33,6 @@ with System; use type System.Address;
 package body Ada.Containers.Formal_Vectors with
   SPARK_Mode => Off
 is
-   pragma Annotate (CodePeer, Skip_Analysis);
 
    Growth_Factor : constant := 2;
    --  When growing a container, multiply current capacity by this. Doubling
@@ -45,10 +44,9 @@ is
    procedure Free is
       new Ada.Unchecked_Deallocation (Elements_Array, Elements_Array_Ptr);
 
-   type Maximal_Array_Ptr is access all Elements_Array (Capacity_Range)
+   type Maximal_Array_Ptr is access all Elements_Array (Array_Index)
      with Storage_Size => 0;
-   type Maximal_Array_Ptr_Const is access constant
-     Elements_Array (Capacity_Range)
+   type Maximal_Array_Ptr_Const is access constant Elements_Array (Array_Index)
        with Storage_Size => 0;
 
    function Elems (Container : in out Vector) return Maximal_Array_Ptr;
@@ -60,6 +58,9 @@ is
    --  possible bounds. This means that the pointer is a thin pointer. This is
    --  necessary because 'Unrestricted_Access doesn't work when it produces
    --  access-to-unconstrained and is returned from a function.
+   --
+   --  Note that this is dangerous: make sure calls to this use an indexed
+   --  component or slice that is within the bounds 1 .. Length (Container).
 
    function Get_Element
      (Container : Vector;
@@ -111,7 +112,7 @@ is
          Reserve_Capacity
            (Container,
             Capacity_Range'Max (Capacity (Container) * Growth_Factor,
-                            Capacity_Range (New_Length)));
+                                Capacity_Range (New_Length)));
       end if;
 
       if Container.Last = Index_Type'Last then
@@ -353,7 +354,7 @@ is
    -- Generic_Sorting --
    ---------------------
 
-   package body Generic_Sorting is
+   package body Generic_Sorting with SPARK_Mode => Off is
 
       ---------------
       -- Is_Sorted --
@@ -381,7 +382,7 @@ is
       is
          procedure Sort is
            new Generic_Array_Sort
-             (Index_Type   => Capacity_Range,
+             (Index_Type   => Array_Index,
               Element_Type => Element_Type,
               Array_Type   => Elements_Array,
               "<"          => "<");

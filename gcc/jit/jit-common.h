@@ -1,5 +1,5 @@
 /* Core of implementation of libgccjit.so
-   Copyright (C) 2013-2014 Free Software Foundation, Inc.
+   Copyright (C) 2013-2015 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -23,7 +23,9 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "libgccjit.h"
 
+#include "vec.h"
 #include "tree.h"
+#include "inchash.h"
 #include "tree-iterator.h"
 
 #ifdef GCC_VERSION
@@ -97,6 +99,7 @@ namespace jit {
 
 class result;
 class dump;
+class logger;
 class builtins_manager; // declared within jit-builtins.h
 class tempdir;
 
@@ -124,6 +127,7 @@ namespace recording {
 	class global;
         class param;
     class statement;
+    class case_;
 
   /* End of recording types. */
 }
@@ -145,6 +149,7 @@ namespace playback {
     class source_file;
     class source_line;
     class location;
+    class case_;
 
   /* End of playback types. */
 }
@@ -159,6 +164,8 @@ public:
 	bool update_locations);
   ~dump ();
 
+  recording::context &get_context () { return m_ctxt; }
+
   void write (const char *fmt, ...)
     GNU_PRINTF(2, 3);
 
@@ -167,6 +174,8 @@ public:
   recording::location *
   make_location () const;
 
+  FILE *get_file () const { return m_file; }
+
 private:
   recording::context &m_ctxt;
   const char *m_filename;
@@ -174,6 +183,17 @@ private:
   int m_line;
   int m_column;
   FILE *m_file;
+};
+
+/* A hidden enum of boolean options that are only exposed via API
+   entrypoints, rather than via gcc_jit_context_set_bool_option.  */
+
+enum inner_bool_option
+{
+  INNER_BOOL_OPTION_ALLOW_UNREACHABLE_BLOCKS,
+  INNER_BOOL_OPTION_USE_EXTERNAL_DRIVER,
+
+  NUM_INNER_BOOL_OPTIONS
 };
 
 } // namespace gcc::jit

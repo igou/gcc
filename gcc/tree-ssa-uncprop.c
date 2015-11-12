@@ -1,5 +1,5 @@
 /* Routines for discovering and unpropagating edge equivalences.
-   Copyright (C) 2005-2014 Free Software Foundation, Inc.
+   Copyright (C) 2005-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,38 +20,19 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
 #include "tree.h"
-#include "stor-layout.h"
-#include "flags.h"
-#include "tm_p.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "cfganal.h"
-#include "basic-block.h"
-#include "hash-table.h"
-#include "hash-map.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "gimple-expr.h"
-#include "is-a.h"
 #include "gimple.h"
-#include "gimple-iterator.h"
-#include "gimple-ssa.h"
-#include "tree-cfg.h"
-#include "tree-phinodes.h"
-#include "ssa-iterators.h"
-#include "domwalk.h"
 #include "tree-pass.h"
-#include "tree-ssa-propagate.h"
+#include "ssa.h"
+#include "fold-const.h"
+#include "cfganal.h"
+#include "gimple-iterator.h"
+#include "tree-cfg.h"
+#include "domwalk.h"
+#include "tree-hash-traits.h"
+#include "tree-ssa-live.h"
+#include "tree-ssa-coalesce.h"
 
 /* The basic structure describing an equivalency created by traversing
    an edge.  Traversing the edge effectively means that we can assume
@@ -79,7 +60,7 @@ associate_equivalences_with_edges (void)
   FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator gsi = gsi_last_bb (bb);
-      gimple stmt;
+      gimple *stmt;
 
       /* If the block does not end with a COND_EXPR or SWITCH_EXPR
 	 then there is nothing to do.  */
@@ -162,7 +143,7 @@ associate_equivalences_with_edges (void)
 		     this value unless we know that the value is nonzero.  */
 		  if (HONOR_SIGNED_ZEROS (op0)
 		      && (TREE_CODE (op1) != REAL_CST
-			  || REAL_VALUES_EQUAL (dconst0, TREE_REAL_CST (op1))))
+			  || real_equal (&dconst0, &TREE_REAL_CST (op1))))
 		    continue;
 
 		  equivalency = XNEW (struct edge_equivalency);
@@ -296,24 +277,10 @@ struct equiv_hash_elt
 
 /* Value to ssa name equivalence hashtable helpers.  */
 
-struct val_ssa_equiv_hash_traits : default_hashmap_traits
+struct val_ssa_equiv_hash_traits : simple_hashmap_traits <tree_operand_hash>
 {
-  static inline hashval_t hash (tree);
-  static inline bool equal_keys (tree, tree);
   template<typename T> static inline void remove (T &);
 };
-
-inline hashval_t
-val_ssa_equiv_hash_traits::hash (tree value)
-{
-  return iterative_hash_expr (value, 0);
-}
-
-inline bool
-val_ssa_equiv_hash_traits::equal_keys (tree value1, tree value2)
-{
-  return operand_equal_p (value1, value2, 0);
-}
 
 /* Free an instance of equiv_hash_elt.  */
 
@@ -411,7 +378,7 @@ uncprop_into_successor_phis (basic_block bb)
       /* Walk over the PHI nodes, unpropagating values.  */
       for (gsi = gsi_start (phis) ; !gsi_end_p (gsi); gsi_next (&gsi))
 	{
-	  gimple phi = gsi_stmt (gsi);
+	  gimple *phi = gsi_stmt (gsi);
 	  tree arg = PHI_ARG_DEF (phi, e->dest_idx);
 	  tree res = PHI_RESULT (phi);
 

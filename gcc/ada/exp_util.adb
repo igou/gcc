@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -34,6 +34,7 @@ with Errout;   use Errout;
 with Exp_Aggr; use Exp_Aggr;
 with Exp_Ch6;  use Exp_Ch6;
 with Exp_Ch7;  use Exp_Ch7;
+with Ghost;    use Ghost;
 with Inline;   use Inline;
 with Itypes;   use Itypes;
 with Lib;      use Lib;
@@ -203,6 +204,13 @@ package body Exp_Util is
 
          when others => null;
       end case;
+
+      --  Nothing to do for the identifier in an object renaming declaration,
+      --  the renaming itself does not need atomic synchronization.
+
+      if Nkind (Parent (N)) = N_Object_Renaming_Declaration then
+         return;
+      end if;
 
       --  Go ahead and set the flag
 
@@ -412,9 +420,6 @@ package body Exp_Util is
       Proc_To_Call : Node_Id := Empty;
       Ptr_Typ      : Entity_Id;
 
-      function Find_Finalize_Address (Typ : Entity_Id) return Entity_Id;
-      --  Locate TSS primitive Finalize_Address in type Typ
-
       function Find_Object (E : Node_Id) return Node_Id;
       --  Given an arbitrary expression of an allocator, try to find an object
       --  reference in it, otherwise return the original expression.
@@ -422,82 +427,6 @@ package body Exp_Util is
       function Is_Allocate_Deallocate_Proc (Subp : Entity_Id) return Boolean;
       --  Determine whether subprogram Subp denotes a custom allocate or
       --  deallocate.
-
-      ---------------------------
-      -- Find_Finalize_Address --
-      ---------------------------
-
-      function Find_Finalize_Address (Typ : Entity_Id) return Entity_Id is
-         Utyp : Entity_Id := Typ;
-
-      begin
-         --  Handle protected class-wide or task class-wide types
-
-         if Is_Class_Wide_Type (Utyp) then
-            if Is_Concurrent_Type (Root_Type (Utyp)) then
-               Utyp := Root_Type (Utyp);
-
-            elsif Is_Private_Type (Root_Type (Utyp))
-              and then Present (Full_View (Root_Type (Utyp)))
-              and then Is_Concurrent_Type (Full_View (Root_Type (Utyp)))
-            then
-               Utyp := Full_View (Root_Type (Utyp));
-            end if;
-         end if;
-
-         --  Handle private types
-
-         if Is_Private_Type (Utyp) and then Present (Full_View (Utyp)) then
-            Utyp := Full_View (Utyp);
-         end if;
-
-         --  Handle protected and task types
-
-         if Is_Concurrent_Type (Utyp)
-           and then Present (Corresponding_Record_Type (Utyp))
-         then
-            Utyp := Corresponding_Record_Type (Utyp);
-         end if;
-
-         Utyp := Underlying_Type (Base_Type (Utyp));
-
-         --  Deal with untagged derivation of private views. If the parent is
-         --  now known to be protected, the finalization routine is the one
-         --  defined on the corresponding record of the ancestor (corresponding
-         --  records do not automatically inherit operations, but maybe they
-         --  should???)
-
-         if Is_Untagged_Derivation (Typ) then
-            if Is_Protected_Type (Typ) then
-               Utyp := Corresponding_Record_Type (Root_Type (Base_Type (Typ)));
-            else
-               Utyp := Underlying_Type (Root_Type (Base_Type (Typ)));
-
-               if Is_Protected_Type (Utyp) then
-                  Utyp := Corresponding_Record_Type (Utyp);
-               end if;
-            end if;
-         end if;
-
-         --  If the underlying_type is a subtype, we are dealing with the
-         --  completion of a private type. We need to access the base type and
-         --  generate a conversion to it.
-
-         if Utyp /= Base_Type (Utyp) then
-            pragma Assert (Is_Private_Type (Typ));
-
-            Utyp := Base_Type (Utyp);
-         end if;
-
-         --  When dealing with an internally built full view for a type with
-         --  unknown discriminants, use the original record type.
-
-         if Is_Underlying_Record_View (Utyp) then
-            Utyp := Etype (Utyp);
-         end if;
-
-         return TSS (Utyp, TSS_Finalize_Address);
-      end Find_Finalize_Address;
 
       -----------------
       -- Find_Object --
@@ -676,12 +605,6 @@ package body Exp_Util is
 
          elsif No_Pool_Assigned (Ptr_Typ) then
             return;
-
-         --  Access-to-controlled types are not supported on .NET/JVM since
-         --  these targets cannot support pools and address arithmetic.
-
-         elsif VM_Target /= No_VM then
-            return;
          end if;
 
          --  The allocation / deallocation of a controlled object must be
@@ -764,7 +687,7 @@ package body Exp_Util is
             --  since it contains an Unchecked_Conversion.
 
             if Needs_Finalization (Desig_Typ) and then not CodePeer_Mode then
-               Fin_Addr_Id := Find_Finalize_Address (Desig_Typ);
+               Fin_Addr_Id := Finalize_Address (Desig_Typ);
                pragma Assert (Present (Fin_Addr_Id));
 
                Append_To (Actuals,
@@ -1385,7 +1308,7 @@ package body Exp_Util is
          Expr := Make_Function_Call (Loc,
            Name => New_Occurrence_Of (Defining_Entity (Fun), Loc));
 
-         if not In_Init_Proc and then VM_Target = No_VM then
+         if not In_Init_Proc then
             Set_Uses_Sec_Stack (Defining_Entity (Fun));
          end if;
       end if;
@@ -2443,6 +2366,83 @@ package body Exp_Util is
       end if;
    end Expand_Subtype_From_Expr;
 
+   ----------------------
+   -- Finalize_Address --
+   ----------------------
+
+   function Finalize_Address (Typ : Entity_Id) return Entity_Id is
+      Utyp : Entity_Id := Typ;
+
+   begin
+      --  Handle protected class-wide or task class-wide types
+
+      if Is_Class_Wide_Type (Utyp) then
+         if Is_Concurrent_Type (Root_Type (Utyp)) then
+            Utyp := Root_Type (Utyp);
+
+         elsif Is_Private_Type (Root_Type (Utyp))
+           and then Present (Full_View (Root_Type (Utyp)))
+           and then Is_Concurrent_Type (Full_View (Root_Type (Utyp)))
+         then
+            Utyp := Full_View (Root_Type (Utyp));
+         end if;
+      end if;
+
+      --  Handle private types
+
+      if Is_Private_Type (Utyp) and then Present (Full_View (Utyp)) then
+         Utyp := Full_View (Utyp);
+      end if;
+
+      --  Handle protected and task types
+
+      if Is_Concurrent_Type (Utyp)
+        and then Present (Corresponding_Record_Type (Utyp))
+      then
+         Utyp := Corresponding_Record_Type (Utyp);
+      end if;
+
+      Utyp := Underlying_Type (Base_Type (Utyp));
+
+      --  Deal with untagged derivation of private views. If the parent is
+      --  now known to be protected, the finalization routine is the one
+      --  defined on the corresponding record of the ancestor (corresponding
+      --  records do not automatically inherit operations, but maybe they
+      --  should???)
+
+      if Is_Untagged_Derivation (Typ) then
+         if Is_Protected_Type (Typ) then
+            Utyp := Corresponding_Record_Type (Root_Type (Base_Type (Typ)));
+
+         else
+            Utyp := Underlying_Type (Root_Type (Base_Type (Typ)));
+
+            if Is_Protected_Type (Utyp) then
+               Utyp := Corresponding_Record_Type (Utyp);
+            end if;
+         end if;
+      end if;
+
+      --  If the underlying_type is a subtype, we are dealing with the
+      --  completion of a private type. We need to access the base type and
+      --  generate a conversion to it.
+
+      if Utyp /= Base_Type (Utyp) then
+         pragma Assert (Is_Private_Type (Typ));
+
+         Utyp := Base_Type (Utyp);
+      end if;
+
+      --  When dealing with an internally built full view for a type with
+      --  unknown discriminants, use the original record type.
+
+      if Is_Underlying_Record_View (Utyp) then
+         Utyp := Etype (Utyp);
+      end if;
+
+      return TSS (Utyp, TSS_Finalize_Address);
+   end Finalize_Address;
+
    ------------------------
    -- Find_Interface_ADT --
    ------------------------
@@ -2619,11 +2619,13 @@ package body Exp_Util is
       end if;
    end Find_Interface_Tag;
 
-   ------------------
-   -- Find_Prim_Op --
-   ------------------
+   ---------------------------
+   -- Find_Optional_Prim_Op --
+   ---------------------------
 
-   function Find_Prim_Op (T : Entity_Id; Name : Name_Id) return Entity_Id is
+   function Find_Optional_Prim_Op
+     (T : Entity_Id; Name : Name_Id) return Entity_Id
+   is
       Prim : Elmt_Id;
       Typ  : Entity_Id := T;
       Op   : Entity_Id;
@@ -2652,22 +2654,16 @@ package body Exp_Util is
                or else Etype (First_Formal (Op)) = Etype (Last_Formal (Op)));
 
          Next_Elmt (Prim);
-
-         --  Raise Program_Error if no primitive found
-
-         if No (Prim) then
-            raise Program_Error;
-         end if;
       end loop;
 
-      return Node (Prim);
-   end Find_Prim_Op;
+      return Node (Prim); -- Empty if not found
+   end Find_Optional_Prim_Op;
 
-   ------------------
-   -- Find_Prim_Op --
-   ------------------
+   ---------------------------
+   -- Find_Optional_Prim_Op --
+   ---------------------------
 
-   function Find_Prim_Op
+   function Find_Optional_Prim_Op
      (T    : Entity_Id;
       Name : TSS_Name_Type) return Entity_Id
    is
@@ -2707,8 +2703,85 @@ package body Exp_Util is
       elsif Present (Inher_Op) then
          return Inher_Op;
       else
+         return Empty;
+      end if;
+   end Find_Optional_Prim_Op;
+
+   -------------------------------
+   -- Find_Primitive_Operations --
+   -------------------------------
+
+   function Find_Primitive_Operations
+     (T    : Entity_Id;
+      Name : Name_Id) return Node_Id
+   is
+      Prim_Elmt : Elmt_Id;
+      Prim_Id   : Entity_Id;
+      Ref       : Node_Id;
+      Typ       : Entity_Id := T;
+
+   begin
+      if Is_Class_Wide_Type (Typ) then
+         Typ := Root_Type (Typ);
+      end if;
+
+      Typ := Underlying_Type (Typ);
+
+      Ref := Empty;
+      Prim_Elmt := First_Elmt (Primitive_Operations (Typ));
+      while Present (Prim_Elmt) loop
+         Prim_Id := Node (Prim_Elmt);
+            if Chars (Prim_Id) = Name then
+
+               --  If this is the first primitive operation found,
+               --  create a reference to it.
+
+               if No (Ref) then
+                  Ref := New_Occurrence_Of (Prim_Id, Sloc (T));
+
+               --  Otherwise, add interpretation to existing reference
+
+               else
+                  Add_One_Interp (Ref, Prim_Id, Etype (Prim_Id));
+               end if;
+            end if;
+         Next_Elmt (Prim_Elmt);
+      end loop;
+
+      return Ref;
+   end Find_Primitive_Operations;
+
+   ------------------
+   -- Find_Prim_Op --
+   ------------------
+
+   function Find_Prim_Op
+     (T : Entity_Id; Name : Name_Id) return Entity_Id
+   is
+      Result : constant Entity_Id := Find_Optional_Prim_Op (T, Name);
+   begin
+      if No (Result) then
          raise Program_Error;
       end if;
+
+      return Result;
+   end Find_Prim_Op;
+
+   ------------------
+   -- Find_Prim_Op --
+   ------------------
+
+   function Find_Prim_Op
+     (T    : Entity_Id;
+      Name : TSS_Name_Type) return Entity_Id
+   is
+      Result : constant Entity_Id := Find_Optional_Prim_Op (T, Name);
+   begin
+      if No (Result) then
+         raise Program_Error;
+      end if;
+
+      return Result;
    end Find_Prim_Op;
 
    ----------------------------
@@ -2961,9 +3034,9 @@ package body Exp_Util is
 
    begin
       --  If parser detected no address clause for the identifier in question,
-      --  then then answer is a quick NO, without the need for a search.
+      --  then the answer is a quick NO, without the need for a search.
 
-      if not Get_Name_Table_Boolean (Chars (Id)) then
+      if not Get_Name_Table_Boolean1 (Chars (Id)) then
          return Empty;
       end if;
 
@@ -2998,9 +3071,22 @@ package body Exp_Util is
    -- Force_Evaluation --
    ----------------------
 
-   procedure Force_Evaluation (Exp : Node_Id; Name_Req : Boolean := False) is
+   procedure Force_Evaluation
+     (Exp           : Node_Id;
+      Name_Req      : Boolean   := False;
+      Related_Id    : Entity_Id := Empty;
+      Is_Low_Bound  : Boolean   := False;
+      Is_High_Bound : Boolean   := False)
+   is
    begin
-      Remove_Side_Effects (Exp, Name_Req, Variable_Ref => True);
+      Remove_Side_Effects
+        (Exp           => Exp,
+         Name_Req      => Name_Req,
+         Variable_Ref  => True,
+         Renaming_Req  => False,
+         Related_Id    => Related_Id,
+         Is_Low_Bound  => Is_Low_Bound,
+         Is_High_Bound => Is_High_Bound);
    end Force_Evaluation;
 
    ---------------------------------
@@ -3354,6 +3440,13 @@ package body Exp_Util is
             end if;
 
             Stm := Parent (CV);
+
+            --  If the tree has been otherwise rewritten there is nothing
+            --  else to be done either.
+
+            if Nkind (Stm) /= N_If_Statement then
+               return;
+            end if;
 
             --  Before start of ELSIF part
 
@@ -3767,10 +3860,10 @@ package body Exp_Util is
       --  caller. Note that in the subexpression case, N is always the child we
       --  came from.
 
-      --  N_Raise_xxx_Error is an annoying special case, it is a statement if
-      --  it has type Standard_Void_Type, and a subexpression otherwise.
-      --  otherwise. Procedure calls, and similarly procedure attribute
-      --  references, are also statements.
+      --  N_Raise_xxx_Error is an annoying special case, it is a statement
+      --  if it has type Standard_Void_Type, and a subexpression otherwise.
+      --  Procedure calls, and similarly procedure attribute references, are
+      --  also statements.
 
       if Nkind (Assoc_Node) in N_Subexpr
         and then (Nkind (Assoc_Node) not in N_Raise_xxx_Error
@@ -3985,6 +4078,22 @@ package body Exp_Util is
                   end if;
 
                   return;
+
+               --  Iteration scheme located in a transient scope
+
+               elsif Nkind (P) = N_Iteration_Scheme
+                 and then Present (Wrapped_Node)
+               then
+                  --  If the enclosing iterator loop is marked as requiring the
+                  --  secondary stack then the actions must be inserted in the
+                  --  transient scope.
+
+                  if Uses_Sec_Stack
+                       (Find_Enclosing_Iterator_Loop (Current_Scope))
+                  then
+                     Store_Before_Actions_In_Scope (Ins_Actions);
+                     return;
+                  end if;
                end if;
 
             --  Statements, declarations, pragmas, representation clauses
@@ -4119,7 +4228,7 @@ package body Exp_Util is
             when
                N_Raise_xxx_Error =>
                   if Etype (P) = Standard_Void_Type then
-                     if  P = Wrapped_Node then
+                     if P = Wrapped_Node then
                         Store_Before_Actions_In_Scope (Ins_Actions);
                      else
                         Insert_List_Before_And_Analyze (P, Ins_Actions);
@@ -4695,7 +4804,6 @@ package body Exp_Util is
    is
       Obj_Id  : constant Entity_Id := Defining_Identifier (Decl);
       Obj_Typ : constant Entity_Id := Base_Type (Etype (Obj_Id));
-      Desig   : Entity_Id := Obj_Typ;
 
       function Initialized_By_Access (Trans_Id : Entity_Id) return Boolean;
       --  Determine whether transient object Trans_Id is initialized either
@@ -4898,31 +5006,61 @@ package body Exp_Util is
       --  Start of processing for Is_Aliased
 
       begin
-         Stmt := First_Stmt;
-         while Present (Stmt) loop
-            if Nkind (Stmt) = N_Object_Declaration then
-               Expr := Expression (Stmt);
+         --  A controlled transient object is not considered aliased when it
+         --  appears inside an expression_with_actions node even when there are
+         --  explicit aliases of it:
 
-               if Present (Expr)
-                 and then Nkind (Expr) = N_Reference
-                 and then Nkind (Prefix (Expr)) = N_Identifier
-                 and then Entity (Prefix (Expr)) = Trans_Id
-               then
-                  return True;
+         --    do
+         --       Trans_Id : Ctrl_Typ ...;  --  controlled transient object
+         --       Alias : ... := Trans_Id;  --  object is aliased
+         --       Val : constant Boolean :=
+         --               ... Alias ...;    --  aliasing ends
+         --       <finalize Trans_Id>       --  object safe to finalize
+         --    in Val end;
+
+         --  Expansion ensures that all aliases are encapsulated in the actions
+         --  list and do not leak to the expression by forcing the evaluation
+         --  of the expression.
+
+         if Nkind (Rel_Node) = N_Expression_With_Actions then
+            return False;
+
+         --  Otherwise examine the statements after the controlled transient
+         --  object and look for various forms of aliasing.
+
+         else
+            Stmt := First_Stmt;
+            while Present (Stmt) loop
+               if Nkind (Stmt) = N_Object_Declaration then
+                  Expr := Expression (Stmt);
+
+                  --  Aliasing of the form:
+                  --    Obj : ... := Trans_Id'reference;
+
+                  if Present (Expr)
+                    and then Nkind (Expr) = N_Reference
+                    and then Nkind (Prefix (Expr)) = N_Identifier
+                    and then Entity (Prefix (Expr)) = Trans_Id
+                  then
+                     return True;
+                  end if;
+
+               elsif Nkind (Stmt) = N_Object_Renaming_Declaration then
+                  Ren_Obj := Find_Renamed_Object (Stmt);
+
+                  --  Aliasing of the form:
+                  --    Obj : ... renames ... Trans_Id ...;
+
+                  if Present (Ren_Obj) and then Ren_Obj = Trans_Id then
+                     return True;
+                  end if;
                end if;
 
-            elsif Nkind (Stmt) = N_Object_Renaming_Declaration then
-               Ren_Obj := Find_Renamed_Object (Stmt);
+               Next (Stmt);
+            end loop;
 
-               if Present (Ren_Obj) and then Ren_Obj = Trans_Id then
-                  return True;
-               end if;
-            end if;
-
-            Next (Stmt);
-         end loop;
-
-         return False;
+            return False;
+         end if;
       end Is_Aliased;
 
       ------------------
@@ -5023,6 +5161,10 @@ package body Exp_Util is
          return False;
       end Is_Iterated_Container;
 
+      --  Local variables
+
+      Desig : Entity_Id := Obj_Typ;
+
    --  Start of processing for Is_Finalizable_Transient
 
    begin
@@ -5049,7 +5191,7 @@ package body Exp_Util is
           and then not Is_Allocated (Obj_Id)
 
           --  If the transient object is a pointer, check that it is not
-          --  initialized by a function which returns a pointer or acts as a
+          --  initialized by a function that returns a pointer or acts as a
           --  renaming of another pointer.
 
           and then
@@ -5064,6 +5206,12 @@ package body Exp_Util is
           --  Do not consider conversions of tags to class-wide types
 
           and then not Is_Tag_To_Class_Wide_Conversion (Obj_Id)
+
+          --  Do not consider iterators because those are treated as normal
+          --  controlled objects and are processed by the usual finalization
+          --  machinery. This avoids the double finalization of an iterator.
+
+          and then not Is_Iterator (Desig)
 
           --  Do not consider containers in the context of iterator loops. Such
           --  transient objects must exist for as long as the loop is around,
@@ -5215,12 +5363,6 @@ package body Exp_Util is
       T  : constant Entity_Id := Etype (N);
 
    begin
-      --  Objects are never unaligned on VMs
-
-      if VM_Target /= No_VM then
-         return False;
-      end if;
-
       --  If renamed object, apply test to underlying object
 
       if Is_Entity_Name (N)
@@ -5699,6 +5841,11 @@ package body Exp_Util is
       elsif Is_Entity_Name (N) and then Is_Type (Entity (N)) then
          return False;
 
+      --  Never true for a compile time known constant
+
+      elsif Compile_Time_Known_Value (N) then
+         return False;
+
       --  True if object reference with volatile type
 
       elsif Is_Volatile_Object (N) then
@@ -5733,21 +5880,6 @@ package body Exp_Util is
          return False;
       end if;
    end Is_Volatile_Reference;
-
-   --------------------------
-   -- Is_VM_By_Copy_Actual --
-   --------------------------
-
-   function Is_VM_By_Copy_Actual (N : Node_Id) return Boolean is
-   begin
-      return VM_Target /= No_VM
-        and then (Nkind (N) = N_Slice
-                    or else
-                      (Nkind (N) = N_Identifier
-                        and then Present (Renamed_Object (Entity (N)))
-                        and then Nkind (Renamed_Object (Entity (N))) =
-                                                                 N_Slice));
-   end Is_VM_By_Copy_Actual;
 
    --------------------
    -- Kill_Dead_Code --
@@ -6074,6 +6206,16 @@ package body Exp_Util is
         or else Is_Constrained (Root_Typ)
       then
          Constr_Root := Root_Typ;
+
+         --  At this point in the expansion, non-limited view of the type
+         --  must be available, otherwise the error will be reported later.
+
+         if From_Limited_With (Constr_Root)
+           and then Present (Non_Limited_View (Constr_Root))
+         then
+            Constr_Root := Non_Limited_View (Constr_Root);
+         end if;
+
       else
          Constr_Root := Make_Temporary (Loc, 'R');
 
@@ -6315,33 +6457,46 @@ package body Exp_Util is
       Expr : Node_Id;
       Mem  : Boolean := False) return Node_Id
    is
-      Loc : constant Source_Ptr := Sloc (Expr);
+      Loc  : constant Source_Ptr := Sloc (Expr);
+      Call : Node_Id;
+      PFM  : Entity_Id;
+
+      Save_Ghost_Mode : constant Ghost_Mode_Type := Ghost_Mode;
 
    begin
       pragma Assert (Present (Predicate_Function (Typ)));
 
+      --  The related type may be subject to pragma Ghost. Set the mode now to
+      --  ensure that the call is properly marked as Ghost.
+
+      Set_Ghost_Mode_From_Entity (Typ);
+
       --  Call special membership version if requested and available
 
       if Mem then
-         declare
-            PFM : constant Entity_Id := Predicate_Function_M (Typ);
-         begin
-            if Present (PFM) then
-               return
-                 Make_Function_Call (Loc,
-                   Name                   => New_Occurrence_Of (PFM, Loc),
-                   Parameter_Associations => New_List (Relocate_Node (Expr)));
-            end if;
-         end;
+         PFM := Predicate_Function_M (Typ);
+
+         if Present (PFM) then
+            Call :=
+              Make_Function_Call (Loc,
+                Name                   => New_Occurrence_Of (PFM, Loc),
+                Parameter_Associations => New_List (Relocate_Node (Expr)));
+
+            Ghost_Mode := Save_Ghost_Mode;
+            return Call;
+         end if;
       end if;
 
       --  Case of calling normal predicate function
 
-      return
-          Make_Function_Call (Loc,
-            Name                   =>
-              New_Occurrence_Of (Predicate_Function (Typ), Loc),
-            Parameter_Associations => New_List (Relocate_Node (Expr)));
+      Call :=
+        Make_Function_Call (Loc,
+          Name                   =>
+            New_Occurrence_Of (Predicate_Function (Typ), Loc),
+          Parameter_Associations => New_List (Relocate_Node (Expr)));
+
+      Ghost_Mode := Save_Ghost_Mode;
+      return Call;
    end Make_Predicate_Call;
 
    --------------------------
@@ -6352,13 +6507,14 @@ package body Exp_Util is
      (Typ  : Entity_Id;
       Expr : Node_Id) return Node_Id
    is
-      Loc : constant Source_Ptr := Sloc (Expr);
-      Nam : Name_Id;
+      Loc      : constant Source_Ptr := Sloc (Expr);
+      Arg_List : List_Id;
+      Nam      : Name_Id;
 
    begin
-      --  If predicate checks are suppressed, then return a null statement.
-      --  For this call, we check only the scope setting. If the caller wants
-      --  to check a specific entity's setting, they must do it manually.
+      --  If predicate checks are suppressed, then return a null statement. For
+      --  this call, we check only the scope setting. If the caller wants to
+      --  check a specific entity's setting, they must do it manually.
 
       if Predicate_Checks_Suppressed (Empty) then
          return Make_Null_Statement (Loc);
@@ -6382,14 +6538,24 @@ package body Exp_Util is
          Nam := Name_Predicate;
       end if;
 
+      Arg_List := New_List (
+        Make_Pragma_Argument_Association (Loc,
+          Expression => Make_Identifier (Loc, Nam)),
+        Make_Pragma_Argument_Association (Loc,
+          Expression => Make_Predicate_Call (Typ, Expr)));
+
+      if Has_Aspect (Typ, Aspect_Predicate_Failure) then
+         Append_To (Arg_List,
+           Make_Pragma_Argument_Association (Loc,
+             Expression =>
+               New_Copy_Tree
+                 (Expression (Find_Aspect (Typ, Aspect_Predicate_Failure)))));
+      end if;
+
       return
         Make_Pragma (Loc,
           Pragma_Identifier            => Make_Identifier (Loc, Name_Check),
-          Pragma_Argument_Associations => New_List (
-            Make_Pragma_Argument_Association (Loc,
-              Expression => Make_Identifier (Loc, Nam)),
-            Make_Pragma_Argument_Association (Loc,
-              Expression => Make_Predicate_Call (Typ, Expr))));
+          Pragma_Argument_Associations => Arg_List);
    end Make_Predicate_Check;
 
    ----------------------------
@@ -6530,7 +6696,7 @@ package body Exp_Util is
             EQ_Typ     : Entity_Id := Empty;
 
          begin
-            --  A class-wide equivalent type is not needed when VM_Target
+            --  A class-wide equivalent type is not needed on VM targets
             --  because the VM back-ends handle the class-wide object
             --  initialization itself (and doesn't need or want the
             --  additional intermediate type to handle the assignment).
@@ -6731,21 +6897,22 @@ package body Exp_Util is
       if Restriction_Active (No_Finalization) then
          return False;
 
-      --  C++, CIL and Java types are not considered controlled. It is assumed
-      --  that the non-Ada side will handle their clean up.
+      --  C++ types are not considered controlled. It is assumed that the
+      --  non-Ada side will handle their clean up.
 
-      elsif Convention (T) = Convention_CIL
-        or else Convention (T) = Convention_CPP
-        or else Convention (T) = Convention_Java
-      then
+      elsif Convention (T) = Convention_CPP then
+         return False;
+
+      --  Never needs finalization if Disable_Controlled set
+
+      elsif Disable_Controlled (T) then
          return False;
 
       else
          --  Class-wide types are treated as controlled because derivations
          --  from the root type can introduce controlled components.
 
-         return
-           Is_Class_Wide_Type (T)
+         return Is_Class_Wide_Type (T)
              or else Is_Controlled (T)
              or else Has_Controlled_Component (T)
              or else Has_Some_Controlled_Component (T)
@@ -6848,9 +7015,7 @@ package body Exp_Util is
    function Non_Limited_Designated_Type (T : Entity_Id) return Entity_Id is
       Desig : constant Entity_Id := Designated_Type (T);
    begin
-      if Ekind (Desig) = E_Incomplete_Type
-        and then Present (Non_Limited_View (Desig))
-      then
+      if Has_Non_Limited_View (Desig) then
          return Non_Limited_View (Desig);
       else
          return Desig;
@@ -6930,6 +7095,13 @@ package body Exp_Util is
 
    function Possible_Bit_Aligned_Component (N : Node_Id) return Boolean is
    begin
+      --  Do not process an unanalyzed node because it is not yet decorated and
+      --  most checks performed below will fail.
+
+      if not Analyzed (N) then
+         return False;
+      end if;
+
       case Nkind (N) is
 
          --  Case of indexed component
@@ -7307,8 +7479,15 @@ package body Exp_Util is
         (Loc         : Source_Ptr;
          Id          : Character;
          Related_Nod : Node_Id := Empty) return Entity_Id;
-      --  Create an external symbol of the form xxx_FIRST/_LAST if Related_Id
-      --  is present, otherwise it generates an internal temporary.
+      --  Create an external symbol of the form xxx_FIRST/_LAST if Related_Nod
+      --  is present (xxx is taken from the Chars field of Related_Nod),
+      --  otherwise it generates an internal temporary.
+
+      function Is_Name_Reference (N : Node_Id) return Boolean;
+      --  Determine if the tree referenced by N represents a name. This is
+      --  similar to Is_Object_Reference but returns true only if N can be
+      --  renamed without the need for a temporary, the typical example of
+      --  an object not in this category being a function call.
 
       ---------------------
       -- Build_Temporary --
@@ -7339,6 +7518,58 @@ package body Exp_Util is
             return Make_Temporary (Loc, Id, Related_Nod);
          end if;
       end Build_Temporary;
+
+      -----------------------
+      -- Is_Name_Reference --
+      -----------------------
+
+      function Is_Name_Reference (N : Node_Id) return Boolean is
+      begin
+         if Is_Entity_Name (N) then
+            return Present (Entity (N)) and then Is_Object (Entity (N));
+         end if;
+
+         case Nkind (N) is
+            when N_Indexed_Component | N_Slice =>
+               return
+                 Is_Name_Reference (Prefix (N))
+                   or else Is_Access_Type (Etype (Prefix (N)));
+
+            --  Attributes 'Input, 'Old and 'Result produce objects
+
+            when N_Attribute_Reference =>
+               return
+                 Nam_In
+                   (Attribute_Name (N), Name_Input, Name_Old, Name_Result);
+
+            when N_Selected_Component =>
+               return
+                 Is_Name_Reference (Selector_Name (N))
+                   and then
+                     (Is_Name_Reference (Prefix (N))
+                       or else Is_Access_Type (Etype (Prefix (N))));
+
+            when N_Explicit_Dereference =>
+               return True;
+
+            --  A view conversion of a tagged name is a name reference
+
+            when N_Type_Conversion =>
+               return Is_Tagged_Type (Etype (Subtype_Mark (N)))
+                 and then Is_Tagged_Type (Etype (Expression (N)))
+                 and then Is_Name_Reference (Expression (N));
+
+            --  An unchecked type conversion is considered to be a name if
+            --  the operand is a name (this construction arises only as a
+            --  result of expansion activities).
+
+            when N_Unchecked_Type_Conversion =>
+               return Is_Name_Reference (Expression (N));
+
+            when others =>
+               return False;
+         end case;
+      end Is_Name_Reference;
 
       --  Local variables
 
@@ -7380,34 +7611,25 @@ package body Exp_Util is
          return;
       end if;
 
-      --  The remaining procesaing is done with all checks suppressed
+      --  The remaining processing is done with all checks suppressed
 
       --  Note: from now on, don't use return statements, instead do a goto
       --  Leave, to ensure that we properly restore Scope_Suppress.Suppress.
 
       Scope_Suppress.Suppress := (others => True);
 
-      --  If it is a scalar type and we need to capture the value, just make
-      --  a copy. Likewise for a function call, an attribute reference, a
-      --  conditional expression, an allocator, or an operator. And if we have
-      --  a volatile reference and Name_Req is not set (see comments for
-      --  Side_Effect_Free).
+      --  If it is an elementary type and we need to capture the value, just
+      --  make a constant. Likewise if this is not a name reference, except
+      --  for a type conversion because we would enter an infinite recursion
+      --  with Checks.Apply_Predicate_Check if the target type has predicates.
+      --  And type conversions need a specific treatment anyway, see below.
+      --  Also do it if we have a volatile reference and Name_Req is not set
+      --  (see comments for Side_Effect_Free).
 
       if Is_Elementary_Type (Exp_Type)
-
-        --  Note: this test is rather mysterious??? Why can't we just test ONLY
-        --  Is_Elementary_Type and be done with it. If we try that approach, we
-        --  get some failures (infinite recursions) from the Duplicate_Subexpr
-        --  call at the end of Checks.Apply_Predicate_Check. To be
-        --  investigated ???
-
         and then (Variable_Ref
-                   or else Nkind_In (Exp, N_Attribute_Reference,
-                                          N_Allocator,
-                                          N_Case_Expression,
-                                          N_If_Expression,
-                                          N_Function_Call)
-                   or else Nkind (Exp) in N_Op
+                   or else (not Is_Name_Reference (Exp)
+                             and then Nkind (Exp) /= N_Type_Conversion)
                    or else (not Name_Req
                              and then Is_Volatile_Reference (Exp)))
       then
@@ -7527,20 +7749,13 @@ package body Exp_Util is
             Insert_Action (Exp, E);
          end if;
 
-      --  For expressions that denote objects, we can use a renaming scheme.
+      --  For expressions that denote names, we can use a renaming scheme.
       --  This is needed for correctness in the case of a volatile object of
       --  a non-volatile type because the Make_Reference call of the "default"
       --  approach would generate an illegal access value (an access value
       --  cannot designate such an object - see Analyze_Reference).
 
-      elsif Is_Object_Reference (Exp)
-        and then Nkind (Exp) /= N_Function_Call
-
-        --  In Ada 2012 a qualified expression is an object, but for purposes
-        --  of removing side effects it still need to be transformed into a
-        --  separate declaration, particularly in the case of an aggregate.
-
-        and then Nkind (Exp) /= N_Qualified_Expression
+      elsif Is_Name_Reference (Exp)
 
         --  We skip using this scheme if we have an object of a volatile
         --  type and we do not have Name_Req set true (see comments for
@@ -7549,37 +7764,13 @@ package body Exp_Util is
         and then (Name_Req or else not Treat_As_Volatile (Exp_Type))
       then
          Def_Id := Build_Temporary (Loc, 'R', Exp);
+         Res := New_Occurrence_Of (Def_Id, Loc);
 
-         if Nkind (Exp) = N_Selected_Component
-           and then Nkind (Prefix (Exp)) = N_Function_Call
-           and then Is_Array_Type (Exp_Type)
-         then
-            --  Avoid generating a variable-sized temporary, by generating
-            --  the renaming declaration just for the function call. The
-            --  transformation could be refined to apply only when the array
-            --  component is constrained by a discriminant???
-
-            Res :=
-              Make_Selected_Component (Loc,
-                Prefix => New_Occurrence_Of (Def_Id, Loc),
-                Selector_Name => Selector_Name (Exp));
-
-            Insert_Action (Exp,
-              Make_Object_Renaming_Declaration (Loc,
-                Defining_Identifier => Def_Id,
-                Subtype_Mark        =>
-                  New_Occurrence_Of (Base_Type (Etype (Prefix (Exp))), Loc),
-                Name                => Relocate_Node (Prefix (Exp))));
-
-         else
-            Res := New_Occurrence_Of (Def_Id, Loc);
-
-            Insert_Action (Exp,
-              Make_Object_Renaming_Declaration (Loc,
-                Defining_Identifier => Def_Id,
-                Subtype_Mark        => New_Occurrence_Of (Exp_Type, Loc),
-                Name                => Relocate_Node (Exp)));
-         end if;
+         Insert_Action (Exp,
+           Make_Object_Renaming_Declaration (Loc,
+             Defining_Identifier => Def_Id,
+             Subtype_Mark        => New_Occurrence_Of (Exp_Type, Loc),
+             Name                => Relocate_Node (Exp)));
 
          --  If this is a packed reference, or a selected component with
          --  a non-standard representation, a reference to the temporary
@@ -7597,7 +7788,19 @@ package body Exp_Util is
             Set_Is_Renaming_Of_Object (Def_Id, False);
          end if;
 
-      --  Otherwise we generate a reference to the value
+      --  Avoid generating a variable-sized temporary, by generating the
+      --  reference just for the function call. The transformation could be
+      --  refined to apply only when the array component is constrained by a
+      --  discriminant???
+
+      elsif Nkind (Exp) = N_Selected_Component
+        and then Nkind (Prefix (Exp)) = N_Function_Call
+        and then Is_Array_Type (Exp_Type)
+      then
+         Remove_Side_Effects (Prefix (Exp), Name_Req, Variable_Ref);
+         goto Leave;
+
+      --  Otherwise we generate a reference to the expression
 
       else
          --  An expression which is in SPARK mode is considered side effect
@@ -7830,13 +8033,19 @@ package body Exp_Util is
          if Nkind (Decl) = N_Full_Type_Declaration then
             Typ := Defining_Identifier (Decl);
 
-            if Is_Tagged_Type (Typ)
+            --  Ignored Ghost types do not need any cleanup actions because
+            --  they will not appear in the final tree.
+
+            if Is_Ignored_Ghost_Entity (Typ) then
+               null;
+
+            elsif Is_Tagged_Type (Typ)
               and then Is_Library_Level_Entity (Typ)
               and then Convention (Typ) = Convention_Ada
               and then Present (Access_Disp_Table (Typ))
               and then RTE_Available (RE_Unregister_Tag)
-              and then not No_Run_Time_Mode
               and then not Is_Abstract_Type (Typ)
+              and then not No_Run_Time_Mode
             then
                return True;
             end if;
@@ -7861,6 +8070,22 @@ package body Exp_Util is
 
             elsif Is_Processed_Transient (Obj_Id) then
                null;
+
+            --  Ignored Ghost objects do not need any cleanup actions because
+            --  they will not appear in the final tree.
+
+            elsif Is_Ignored_Ghost_Entity (Obj_Id) then
+               null;
+
+            --  The expansion of iterator loops generates an object declaration
+            --  where the Ekind is explicitly set to loop parameter. This is to
+            --  ensure that the loop parameter behaves as a constant from user
+            --  code point of view. Such object are never controlled and do not
+            --  require cleanup actions. An iterator loop over a container of
+            --  controlled objects does not produce such object declarations.
+
+            elsif Ekind (Obj_Id) = E_Loop_Parameter then
+               return False;
 
             --  The object is of the form:
             --    Obj : Typ [:= Expr];
@@ -7940,6 +8165,12 @@ package body Exp_Util is
             if Lib_Level and then Finalize_Storage_Only (Obj_Typ) then
                null;
 
+            --  Ignored Ghost object renamings do not need any cleanup actions
+            --  because they will not appear in the final tree.
+
+            elsif Is_Ignored_Ghost_Entity (Obj_Id) then
+               null;
+
             --  Return object of a build-in-place function. This case is
             --  recognized and marked by the expansion of an extended return
             --  statement (see Expand_N_Extended_Return_Statement).
@@ -7981,11 +8212,17 @@ package body Exp_Util is
          then
             Typ := Entity (Decl);
 
-            if ((Is_Access_Type (Typ)
-                  and then not Is_Access_Subprogram_Type (Typ)
-                  and then Needs_Finalization
-                             (Available_View (Designated_Type (Typ))))
-                or else (Is_Type (Typ) and then Needs_Finalization (Typ)))
+            --  Freeze nodes for ignored Ghost types do not need cleanup
+            --  actions because they will never appear in the final tree.
+
+            if Is_Ignored_Ghost_Entity (Typ) then
+               null;
+
+            elsif ((Is_Access_Type (Typ)
+                      and then not Is_Access_Subprogram_Type (Typ)
+                      and then Needs_Finalization
+                                 (Available_View (Designated_Type (Typ))))
+                    or else (Is_Type (Typ) and then Needs_Finalization (Typ)))
               and then Requires_Cleanup_Actions
                          (Actions (Decl), Lib_Level, Nested_Constructs)
             then
@@ -7997,15 +8234,17 @@ package body Exp_Util is
          elsif Nested_Constructs
            and then Nkind (Decl) = N_Package_Declaration
          then
-            Pack_Id := Defining_Unit_Name (Specification (Decl));
+            Pack_Id := Defining_Entity (Decl);
 
-            if Nkind (Pack_Id) = N_Defining_Program_Unit_Name then
-               Pack_Id := Defining_Identifier (Pack_Id);
-            end if;
+            --  Do not inspect an ignored Ghost package because all code found
+            --  within will not appear in the final tree.
 
-            if Ekind (Pack_Id) /= E_Generic_Package
-              and then
-                Requires_Cleanup_Actions (Specification (Decl), Lib_Level)
+            if Is_Ignored_Ghost_Entity (Pack_Id) then
+               null;
+
+            elsif Ekind (Pack_Id) /= E_Generic_Package
+              and then Requires_Cleanup_Actions
+                         (Specification (Decl), Lib_Level)
             then
                return True;
             end if;
@@ -8013,11 +8252,37 @@ package body Exp_Util is
          --  Nested package bodies
 
          elsif Nested_Constructs and then Nkind (Decl) = N_Package_Body then
-            Pack_Id := Corresponding_Spec (Decl);
 
-            if Ekind (Pack_Id) /= E_Generic_Package
+            --  Do not inspect an ignored Ghost package body because all code
+            --  found within will not appear in the final tree.
+
+            if Is_Ignored_Ghost_Entity (Defining_Entity (Decl)) then
+               null;
+
+            elsif Ekind (Corresponding_Spec (Decl)) /= E_Generic_Package
               and then Requires_Cleanup_Actions (Decl, Lib_Level)
             then
+               return True;
+            end if;
+
+         elsif Nkind (Decl) = N_Block_Statement
+           and then
+
+           --  Handle a rare case caused by a controlled transient variable
+           --  created as part of a record init proc. The variable is wrapped
+           --  in a block, but the block is not associated with a transient
+           --  scope.
+
+           (Inside_Init_Proc
+
+           --  Handle the case where the original context has been wrapped in
+           --  a block to avoid interference between exception handlers and
+           --  At_End handlers. Treat the block as transparent and process its
+           --  contents.
+
+             or else Is_Finalization_Wrapper (Decl))
+         then
+            if Requires_Cleanup_Actions (Decl, Lib_Level) then
                return True;
             end if;
          end if;
@@ -8047,7 +8312,7 @@ package body Exp_Util is
 
    begin
       --  If the expression is the RHS of an assignment or object declaration
-      --   we are always OK because there will always be a target.
+      --  we are always OK because there will always be a target.
 
       --  Object renaming declarations, (generated for view conversions of
       --  actuals in inlined calls), like object declarations, provide an
@@ -8088,8 +8353,8 @@ package body Exp_Util is
          Otyp := Entity (Subtype_Mark (Exp));
       end if;
 
-      --  The input type always comes from the expression, and we assume
-      --  this is indeed always analyzed, so we can simply get the Etype.
+      --  The input type always comes from the expression, and we assume this
+      --  is indeed always analyzed, so we can simply get the Etype.
 
       Ityp := Etype (Expression (Exp));
 
@@ -8160,8 +8425,8 @@ package body Exp_Util is
       then
          return True;
 
-      --  If either type is tagged, then we know the alignment is OK so
-      --  Gigi will be able to use pointer punning.
+      --  If either type is tagged, then we know the alignment is OK so Gigi
+      --  will be able to use pointer punning.
 
       elsif Is_Tagged_Type (Otyp) or else Is_Tagged_Type (Ityp) then
          return True;
@@ -8713,10 +8978,10 @@ package body Exp_Util is
       --  locate here if this node corresponds to a previous invocation of
       --  Remove_Side_Effects to avoid a never ending loop in the frontend.
 
-      elsif VM_Target /= No_VM
-         and then not Comes_From_Source (N)
-         and then Nkind (Parent (N)) = N_Object_Renaming_Declaration
-         and then Is_Class_Wide_Type (Typ)
+      elsif not Tagged_Type_Expansion
+        and then not Comes_From_Source (N)
+        and then Nkind (Parent (N)) = N_Object_Renaming_Declaration
+        and then Is_Class_Wide_Type (Typ)
       then
          return True;
       end if;
@@ -8804,23 +9069,10 @@ package body Exp_Util is
             return Side_Effect_Free (Expression (N), Name_Req, Variable_Ref);
 
          --  A selected component is side effect free only if it is a side
-         --  effect free prefixed reference. If it designates a component
-         --  with a rep. clause it must be treated has having a potential
-         --  side effect, because it may be modified through a renaming, and
-         --  a subsequent use of the renaming as a macro will yield the
-         --  wrong value. This complex interaction between renaming and
-         --  removing side effects is a reminder that the latter has become
-         --  a headache to maintain, and that it should be removed in favor
-         --  of the gcc mechanism to capture values ???
+         --  effect free prefixed reference.
 
          when N_Selected_Component =>
-            if Nkind (Parent (N)) = N_Explicit_Dereference
-              and then Has_Non_Standard_Rep (Designated_Type (Typ))
-            then
-               return False;
-            else
-               return Safe_Prefixed_Reference (N);
-            end if;
+            return Safe_Prefixed_Reference (N);
 
          --  A range is side effect free if the bounds are side effect free
 
@@ -9186,7 +9438,8 @@ package body Exp_Util is
 
       return Present (S)
         and then Get_TSS_Name (S) /= TSS_Null
-        and then not Is_Predicate_Function (S);
+        and then not Is_Predicate_Function (S)
+        and then not Is_Predicate_Function_M (S);
    end Within_Internal_Subprogram;
 
    ----------------------------

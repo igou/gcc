@@ -1,5 +1,5 @@
 /* Implement classes and message passing for Objective C.
-   Copyright (C) 1992-2014 Free Software Foundation, Inc.
+   Copyright (C) 1992-2015 Free Software Foundation, Inc.
    Contributed by Steve Naroff.
 
 This file is part of GCC.
@@ -34,42 +34,23 @@ along with GCC; see the file COPYING3.  If not see
 #include "c/c-lang.h"
 #endif
 
-#include "c-family/c-common.h"
 #include "c-family/c-objc.h"
-#include "c-family/c-pragma.h"
-#include "c-family/c-format.h"
-#include "flags.h"
 #include "langhooks.h"
 #include "objc-act.h"
 #include "objc-map.h"
-#include "input.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
 #include "function.h"
 #include "toplev.h"
 #include "debug.h"
 #include "c-family/c-target.h"
-#include "diagnostic-core.h"
 #include "intl.h"
-#include "hash-map.h"
-#include "is-a.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
 #include "cgraph.h"
 #include "tree-iterator.h"
-#include "hash-table.h"
-#include "wide-int.h"
-#include "langhooks-def.h"
 /* Different initialization, code gen and meta data generation for each
    runtime.  */
 #include "objc-runtime-hooks.h"
 /* Routines used mainly by the runtimes.  */
 #include "objc-runtime-shared-support.h"
 /* For default_tree_printer ().  */
-#include "tree-pretty-print.h"
 
 /* For enum gimplify_status */
 #include "gimple-expr.h"
@@ -270,7 +251,7 @@ struct GTY((for_user)) string_descriptor {
   tree constructor;
 };
 
-struct objc_string_hasher : ggc_hasher<string_descriptor *>
+struct objc_string_hasher : ggc_ptr_hash<string_descriptor>
 {
   static hashval_t hash (string_descriptor *);
   static bool equal (string_descriptor *, string_descriptor *);
@@ -432,8 +413,7 @@ objc_init (void)
   return true;
 }
 
-/* This is called automatically (at the very end of compilation) by
-   c_write_global_declarations and cp_write_global_declarations.  */
+/* This is called at the end of parsing by the C/C++ parsers.  */
 void
 objc_write_global_declarations (void)
 {
@@ -478,7 +458,7 @@ objc_write_global_declarations (void)
 	  char * const dumpname = concat (dump_base_name, ".decl", NULL);
 	  gen_declaration_file = fopen (dumpname, "w");
 	  if (gen_declaration_file == 0)
-	    fatal_error ("can%'t open %s: %m", dumpname);
+	    fatal_error (input_location, "can%'t open %s: %m", dumpname);
 	  free (dumpname);
 	}
 
@@ -2031,7 +2011,8 @@ objc_add_method_declaration (bool is_class_method, tree decl, tree attributes)
 	 impossible to get here.  But it's good to have the check in
 	 case the parser changes.
       */
-      fatal_error ("method declaration not in @interface context");
+      fatal_error (input_location,
+		   "method declaration not in @interface context");
     }
 
   if (flag_objc1_only && attributes)
@@ -2856,7 +2837,7 @@ check_protocol_recursively (tree proto, tree list)
 			      /* definition_required */ false);
 
       if (pp == proto)
-	fatal_error ("protocol %qE has circular dependency",
+	fatal_error (input_location, "protocol %qE has circular dependency",
 		     PROTOCOL_NAME (pp));
       if (pp)
 	check_protocol_recursively (proto, PROTOCOL_LIST (pp));
@@ -3861,22 +3842,20 @@ objc_get_class_ivars (tree class_name)
    more like a set).  So, we store the DECLs, but define equality as
    DECLs having the same name, and hash as the hash of the name.  */
 
-struct decl_name_hash : typed_noop_remove <tree_node>
+struct decl_name_hash : nofree_ptr_hash <tree_node>
 {
-  typedef tree_node value_type;
-  typedef tree_node compare_type;
-  static inline hashval_t hash (const value_type *);
-  static inline bool equal (const value_type *, const compare_type *);
+  static inline hashval_t hash (const tree_node *);
+  static inline bool equal (const tree_node *, const tree_node *);
 };
 
 inline hashval_t
-decl_name_hash::hash (const value_type *q)
+decl_name_hash::hash (const tree_node *q)
 {
   return (hashval_t) ((intptr_t)(DECL_NAME (q)) >> 3);
 }
 
 inline bool
-decl_name_hash::equal (const value_type *a, const compare_type *b)
+decl_name_hash::equal (const tree_node *a, const tree_node *b)
 {
   return DECL_NAME (a) == DECL_NAME (b);
 }

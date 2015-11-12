@@ -1,5 +1,5 @@
 /* Generic hooks for the RTL middle-end.
-   Copyright (C) 2004-2014 Free Software Foundation, Inc.
+   Copyright (C) 2004-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -21,10 +21,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tm.h"
+#include "function.h"
 #include "rtl.h"
-#include "rtlhooks-def.h"
-#include "expr.h"
+#include "tree.h"
+#include "insn-config.h"
+#include "emit-rtl.h"
 #include "recog.h"
+#include "rtlhooks-def.h"
+#include "explow.h"
 
 
 /* For speed, we will copy the RTX hooks struct member-by-member

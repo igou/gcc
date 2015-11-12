@@ -1,5 +1,5 @@
 /* Part of CPP library.  (Macro and #define handling.)
-   Copyright (C) 1986-2014 Free Software Foundation, Inc.
+   Copyright (C) 1986-2015 Free Software Foundation, Inc.
    Written by Per Bothner, 1994.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -73,7 +73,7 @@ struct macro_arg_token_iter
      -ftrack-macro-expansion is used this location tracks loci across
      macro expansion.  */
   const source_location *location_ptr;
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
   /* The number of times the iterator went forward. This useful only
      when checking is enabled.  */
   size_t num_forwards;
@@ -141,7 +141,7 @@ static inline const cpp_token **tokens_buff_put_token_to (const cpp_token **,
                                                           const cpp_token *,
                                                           source_location,
                                                           source_location,
-                                                          const struct line_map *,
+                                                          const line_map_macro *,
                                                           unsigned int);
 
 static const cpp_token **tokens_buff_add_token (_cpp_buff *,
@@ -149,7 +149,7 @@ static const cpp_token **tokens_buff_add_token (_cpp_buff *,
 						const cpp_token *,
 						source_location,
 						source_location,
-						const struct line_map *,
+						const line_map_macro *,
 						unsigned int);
 static inline void tokens_buff_remove_last_token (_cpp_buff *);
 static void replace_args (cpp_reader *, cpp_hashnode *, cpp_macro *,
@@ -195,7 +195,9 @@ _cpp_warn_if_unused_macro (cpp_reader *pfile, cpp_hashnode *node,
       cpp_macro *macro = node->value.macro;
 
       if (!macro->used
-	  && MAIN_FILE_P (linemap_lookup (pfile->line_table, macro->line)))
+	  && MAIN_FILE_P (linemap_check_ordinary
+			    (linemap_lookup (pfile->line_table,
+					     macro->line))))
 	cpp_warning_with_line (pfile, CPP_W_UNUSED_MACROS, macro->line, 0,
 			       "macro \"%s\" is not used", NODE_NAME (node));
     }
@@ -393,6 +395,10 @@ _cpp_builtin_macro_text (cpp_reader *pfile, cpp_hashnode *node)
 	    "__COUNTER__ expanded inside directive with -fdirectives-only");
       number = pfile->counter++;
       break;
+
+    case BT_HAS_ATTRIBUTE:
+      number = pfile->cb.has_attribute (pfile);
+      break;
     }
 
   if (result == NULL)
@@ -449,7 +455,7 @@ builtin_macro (cpp_reader *pfile, cpp_hashnode *node, source_location loc)
 	 macro.  */
       source_location *virt_locs = NULL;
       _cpp_buff *token_buf = tokens_buff_new (pfile, 1, &virt_locs);
-      const line_map * map =
+      const line_map_macro * map =
 	linemap_enter_macro (pfile->line_table, node,
 					    token->src_loc, 1);
       tokens_buff_add_token (token_buf, virt_locs, token,
@@ -525,7 +531,7 @@ stringify_arg (cpp_reader *pfile, macro_arg *arg)
 		   || token->type == CPP_WSTRING || token->type == CPP_WCHAR
 		   || token->type == CPP_STRING32 || token->type == CPP_CHAR32
 		   || token->type == CPP_STRING16 || token->type == CPP_CHAR16
-		   || token->type == CPP_UTF8STRING
+		   || token->type == CPP_UTF8STRING || token->type == CPP_UTF8CHAR
 		   || cpp_userdef_string_p (token->type)
 		   || cpp_userdef_char_p (token->type));
 
@@ -1163,7 +1169,7 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
 	    {
 	      unsigned int i;
 	      const cpp_token *src = macro->exp.tokens;
-	      const struct line_map *map;
+	      const line_map_macro *map;
 	      source_location *virt_locs = NULL;
 	      _cpp_buff *macro_tokens
 		= tokens_buff_new (pfile, tokens_count, &virt_locs);
@@ -1224,7 +1230,24 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
 
   pfile->about_to_expand_macro_p = false;
   /* Handle built-in macros and the _Pragma operator.  */
-  return builtin_macro (pfile, node, location);
+  {
+    source_location loc;
+    if (/* The top-level macro invocation that triggered the expansion
+	   we are looking at is with a standard macro ...*/
+	!(pfile->top_most_macro_node->flags & NODE_BUILTIN)
+	/* ... and it's a function-like macro invocation.  */
+	&& pfile->top_most_macro_node->value.macro->fun_like)
+      /* Then the location of the end of the macro invocation is the
+	 location of the closing parenthesis.  */
+      loc = pfile->cur_token[-1].src_loc;
+    else
+      /* Otherwise, the location of the end of the macro invocation is
+	 the location of the expansion point of that top-level macro
+	 invocation.  */
+      loc = location;
+
+    return builtin_macro (pfile, node, loc);
+  }
 }
 
 /* De-allocate the memory used by BUFF which is an array of instances
@@ -1287,14 +1310,11 @@ set_arg_token (macro_arg *arg, const cpp_token *token,
 
   if (loc != NULL)
     {
-#ifdef ENABLE_CHECKING
-      if (kind == MACRO_ARG_TOKEN_STRINGIFIED
-	  || !track_macro_exp_p)
-	/* We can't set the location of a stringified argument
-	   token and we can't set any location if we aren't tracking
-	   macro expansion locations.   */
-	abort ();
-#endif
+      /* We can't set the location of a stringified argument
+	 token and we can't set any location if we aren't tracking
+	 macro expansion locations.   */
+      gcc_checking_assert (kind != MACRO_ARG_TOKEN_STRINGIFIED
+			   && track_macro_exp_p);
       *loc = location;
     }
 }
@@ -1380,7 +1400,7 @@ macro_arg_token_iter_init (macro_arg_token_iter *iter,
   iter->location_ptr = NULL;
   if (track_macro_exp_p)
     iter->location_ptr = get_arg_token_location (arg, kind);
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
   iter->num_forwards = 0;
   if (track_macro_exp_p
       && token_ptr != NULL
@@ -1405,14 +1425,14 @@ macro_arg_token_iter_forward (macro_arg_token_iter *it)
 	it->location_ptr++;
       break;
     case MACRO_ARG_TOKEN_STRINGIFIED:
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
       if (it->num_forwards > 0)
 	abort ();
 #endif
       break;
     }
 
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
   it->num_forwards++;
 #endif
 }
@@ -1421,7 +1441,7 @@ macro_arg_token_iter_forward (macro_arg_token_iter *it)
 static const cpp_token *
 macro_arg_token_iter_get_token (const macro_arg_token_iter *it)
 {
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
   if (it->kind == MACRO_ARG_TOKEN_STRINGIFIED
       && it->num_forwards > 0)
     abort ();
@@ -1435,7 +1455,7 @@ macro_arg_token_iter_get_token (const macro_arg_token_iter *it)
 static source_location
 macro_arg_token_iter_get_location (const macro_arg_token_iter *it)
 {
-#ifdef ENABLE_CHECKING
+#if CHECKING_P
   if (it->kind == MACRO_ARG_TOKEN_STRINGIFIED
       && it->num_forwards > 0)
     abort ();
@@ -1514,7 +1534,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
   _cpp_buff *buff = NULL;
   source_location *virt_locs = NULL;
   unsigned int exp_count;
-  const struct line_map *map = NULL;
+  const line_map_macro *map = NULL;
   int track_macro_exp;
 
   /* First, fully macro-expand arguments, calculating the number of
@@ -2045,7 +2065,7 @@ tokens_buff_put_token_to (const cpp_token **dest,
 			  const cpp_token *token,
 			  source_location virt_loc,
 			  source_location parm_def_loc,			  
-			  const struct line_map *map,
+			  const line_map_macro *map,
 			  unsigned int macro_token_index)
 {
   source_location macro_loc = virt_loc;
@@ -2090,7 +2110,7 @@ tokens_buff_add_token (_cpp_buff *buffer,
 		       const cpp_token *token,
 		       source_location virt_loc,
 		       source_location parm_def_loc,
-		       const struct line_map *map,
+		       const line_map_macro *map,
 		       unsigned int macro_token_index)
 {
   const cpp_token **result;
@@ -2121,11 +2141,9 @@ tokens_buff_add_token (_cpp_buff *buffer,
 static void
 alloc_expanded_arg_mem (cpp_reader *pfile, macro_arg *arg, size_t capacity)
 {
-#ifdef ENABLE_CHECKING
-  if (arg->expanded != NULL
-      || arg->expanded_virt_locs != NULL)
-    abort ();
-#endif
+  gcc_checking_assert (arg->expanded == NULL
+		       && arg->expanded_virt_locs == NULL);
+
   arg->expanded = XNEWVEC (const cpp_token *, capacity);
   if (CPP_OPTION (pfile, track_macro_expansion))
     arg->expanded_virt_locs = XNEWVEC (source_location, capacity);
@@ -2292,6 +2310,10 @@ _cpp_pop_context (cpp_reader *pfile)
 	     macro expansion.  */
 	  && macro_of_context (context->prev) != macro)
 	macro->flags &= ~NODE_DISABLED;
+
+      if (macro == pfile->top_most_macro_node && context->prev == NULL)
+	/* We are popping the context of the top-most macro node.  */
+	pfile->top_most_macro_node = NULL;
     }
 
   if (context->buff)
@@ -2456,9 +2478,13 @@ cpp_get_token_1 (cpp_reader *pfile, source_location *location)
 	{
 	  int ret = 0;
 	  /* If not in a macro context, and we're going to start an
-	     expansion, record the location.  */
+	     expansion, record the location and the top level macro
+	     about to be expanded.  */
 	  if (!in_macro_expansion_p (pfile))
-	    pfile->invocation_location = result->src_loc;
+	    {
+	      pfile->invocation_location = result->src_loc;
+	      pfile->top_most_macro_node = node;
+	    }
 	  if (pfile->state.prevent_expansion)
 	    break;
 
@@ -2678,10 +2704,7 @@ _cpp_backup_tokens (cpp_reader *pfile, unsigned int count)
 	    {
 	      macro_context *m = pfile->context->c.mc;
 	      m->cur_virt_loc--;
-#ifdef ENABLE_CHECKING
-	      if (m->cur_virt_loc < m->virt_locs)
-		abort ();
-#endif
+	      gcc_checking_assert (m->cur_virt_loc >= m->virt_locs);
 	    }
 	  else
 	    abort ();

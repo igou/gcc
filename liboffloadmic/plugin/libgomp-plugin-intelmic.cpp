@@ -1,10 +1,11 @@
 /* Plugin for offload execution on Intel MIC devices.
 
-   Copyright (C) 2014 Free Software Foundation, Inc.
+   Copyright (C) 2014-2015 Free Software Foundation, Inc.
 
    Contributed by Ilya Verbin <ilya.verbin@intel.com>.
 
-   This file is part of the GNU OpenMP Library (libgomp).
+   This file is part of the GNU Offloading and Multi Processing Library
+   (libgomp).
 
    Libgomp is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
@@ -33,12 +34,15 @@
 #include <string.h>
 #include <utility>
 #include <vector>
-#include <libgomp_target.h>
+#include <map>
+#include "libgomp-plugin.h"
 #include "compiler_if_host.h"
 #include "main_target_image.h"
+#include "gomp-constants.h"
 
 #define LD_LIBRARY_PATH_ENV	"LD_LIBRARY_PATH"
 #define MIC_LD_LIBRARY_PATH_ENV	"MIC_LD_LIBRARY_PATH"
+#define OFFLOAD_ACTIVE_WAIT_ENV	"OFFLOAD_ACTIVE_WAIT"
 
 #ifdef DEBUG
 #define TRACE(...)					    \
@@ -51,6 +55,29 @@ fprintf (stderr, "\n");					    \
 #define TRACE { }
 #endif
 
+
+/* Start/end addresses of functions and global variables on a device.  */
+typedef std::vector<addr_pair> AddrVect;
+
+/* Addresses for one image and all devices.  */
+typedef std::vector<AddrVect> DevAddrVect;
+
+/* Addresses for all images and all devices.  */
+typedef std::map<const void *, DevAddrVect> ImgDevAddrMap;
+
+
+/* Total number of available devices.  */
+static int num_devices;
+
+/* Total number of shared libraries with offloading to Intel MIC.  */
+static int num_images;
+
+/* Two dimensional array: one key is a pointer to image,
+   second key is number of device.  Contains a vector of pointer pairs.  */
+static ImgDevAddrMap *address_table;
+
+/* Thread-safe registration of the main image.  */
+static pthread_once_t main_image_is_registered = PTHREAD_ONCE_INIT;
 
 static VarDesc vd_host2tgt = {
   { 1, 1 },		      /* dst, src			      */
@@ -89,29 +116,23 @@ static VarDesc vd_tgt2host = {
 };
 
 
-/* Total number of shared libraries with offloading to Intel MIC.  */
-static int num_libraries;
-
-/* Pointers to the descriptors, containing pointers to host-side tables and to
-   target images.  */
-static std::vector< std::pair<void *, void *> > lib_descrs;
-
-/* Thread-safe registration of the main image.  */
-static pthread_once_t main_image_is_registered = PTHREAD_ONCE_INIT;
-
-
-/* Add path specified in LD_LIBRARY_PATH to MIC_LD_LIBRARY_PATH, which is
-   required by liboffloadmic.  */
 __attribute__((constructor))
 static void
-set_mic_lib_path (void)
+init (void)
 {
   const char *ld_lib_path = getenv (LD_LIBRARY_PATH_ENV);
   const char *mic_lib_path = getenv (MIC_LD_LIBRARY_PATH_ENV);
+  const char *active_wait = getenv (OFFLOAD_ACTIVE_WAIT_ENV);
+
+  /* Disable active wait by default to avoid useless CPU usage.  */
+  if (!active_wait)
+    setenv (OFFLOAD_ACTIVE_WAIT_ENV, "0", 0);
 
   if (!ld_lib_path)
-    return;
+    goto out;
 
+  /* Add path specified in LD_LIBRARY_PATH to MIC_LD_LIBRARY_PATH, which is
+     required by liboffloadmic.  */
   if (!mic_lib_path)
     setenv (MIC_LD_LIBRARY_PATH_ENV, ld_lib_path, 1);
   else
@@ -132,6 +153,26 @@ set_mic_lib_path (void)
       if (!use_alloca)
 	free (mic_lib_path_new);
     }
+
+out:
+  address_table = new ImgDevAddrMap;
+  num_devices = _Offload_number_of_devices ();
+}
+
+extern "C" const char *
+GOMP_OFFLOAD_get_name (void)
+{
+  const char *res = "intelmic";
+  TRACE ("(): return %s", res);
+  return res;
+}
+
+extern "C" unsigned int
+GOMP_OFFLOAD_get_caps (void)
+{
+  unsigned int res = GOMP_OFFLOAD_CAP_OPENMP_400;
+  TRACE ("(): return %x", res);
+  return res;
 }
 
 extern "C" enum offload_target_type
@@ -145,18 +186,8 @@ GOMP_OFFLOAD_get_type (void)
 extern "C" int
 GOMP_OFFLOAD_get_num_devices (void)
 {
-  int res = _Offload_number_of_devices ();
-  TRACE ("(): return %d", res);
-  return res;
-}
-
-/* This should be called from every shared library with offloading.  */
-extern "C" void
-GOMP_OFFLOAD_register_image (void *host_table, void *target_image)
-{
-  TRACE ("(host_table = %p, target_image = %p)", host_table, target_image);
-  lib_descrs.push_back (std::make_pair (host_table, target_image));
-  num_libraries++;
+  TRACE ("(): return %d", num_devices);
+  return num_devices;
 }
 
 static void
@@ -179,7 +210,8 @@ register_main_image ()
   __offload_register_image (&main_target_image);
 }
 
-/* Load offload_target_main on target.  */
+/* liboffloadmic loads and runs offload_target_main on all available devices
+   during a first call to offload ().  */
 extern "C" void
 GOMP_OFFLOAD_init_device (int device)
 {
@@ -187,6 +219,14 @@ GOMP_OFFLOAD_init_device (int device)
   pthread_once (&main_image_is_registered, register_main_image);
   offload (__FILE__, __LINE__, device, "__offload_target_init_proc", 0,
 	   NULL, NULL);
+}
+
+extern "C" void
+GOMP_OFFLOAD_fini_device (int device)
+{
+  TRACE ("");
+  /* Unreachable for GOMP_OFFLOAD_CAP_OPENMP_400.  */
+  abort ();
 }
 
 static void
@@ -218,9 +258,11 @@ get_target_table (int device, int &num_funcs, int &num_vars, void **&table)
     }
 }
 
+/* Offload TARGET_IMAGE to all available devices and fill address_table with
+   corresponding target addresses.  */
+
 static void
-load_lib_and_get_table (int device, int lib_num, mapping_table *&table,
-			int &table_size)
+offload_image (const void *target_image)
 {
   struct TargetImage {
     int64_t size;
@@ -229,19 +271,11 @@ load_lib_and_get_table (int device, int lib_num, mapping_table *&table,
     char data[];
   } __attribute__ ((packed));
 
-  void ***host_table_descr = (void ***) lib_descrs[lib_num].first;
-  void **host_func_start = host_table_descr[0];
-  void **host_func_end   = host_table_descr[1];
-  void **host_var_start  = host_table_descr[2];
-  void **host_var_end    = host_table_descr[3];
+  void *image_start = ((void **) target_image)[0];
+  void *image_end   = ((void **) target_image)[1];
 
-  void **target_image_descr = (void **) lib_descrs[lib_num].second;
-  void *image_start = target_image_descr[0];
-  void *image_end   = target_image_descr[1];
-
-  TRACE ("() host_table_descr { %p, %p, %p, %p }", host_func_start,
-	 host_func_end, host_var_start, host_var_end);
-  TRACE ("() target_image_descr { %p, %p }", image_start, image_end);
+  TRACE ("(target_image = %p { %p, %p })",
+	 target_image, image_start, image_end);
 
   int64_t image_size = (uintptr_t) image_end - (uintptr_t) image_start;
   TargetImage *image
@@ -254,92 +288,104 @@ load_lib_and_get_table (int device, int lib_num, mapping_table *&table,
     }
 
   image->size = image_size;
-  sprintf (image->name, "lib%010d.so", lib_num);
+  sprintf (image->name, "lib%010d.so", num_images++);
   memcpy (image->data, image_start, image->size);
 
   TRACE ("() __offload_register_image %s { %p, %d }",
 	 image->name, image_start, image->size);
   __offload_register_image (image);
 
-  int tgt_num_funcs = 0;
-  int tgt_num_vars = 0;
-  void **tgt_table = NULL;
-  get_target_table (device, tgt_num_funcs, tgt_num_vars, tgt_table);
+  /* Receive tables for target_image from all devices.  */
+  DevAddrVect dev_table;
+  for (int dev = 0; dev < num_devices; dev++)
+    {
+      int num_funcs = 0;
+      int num_vars = 0;
+      void **table = NULL;
+
+      get_target_table (dev, num_funcs, num_vars, table);
+
+      AddrVect curr_dev_table;
+
+      for (int i = 0; i < num_funcs; i++)
+	{
+	  addr_pair tgt_addr;
+	  tgt_addr.start = (uintptr_t) table[i];
+	  tgt_addr.end = tgt_addr.start + 1;
+	  TRACE ("() func %d:\t0x%llx..0x%llx", i,
+		 tgt_addr.start, tgt_addr.end);
+	  curr_dev_table.push_back (tgt_addr);
+	}
+
+      for (int i = 0; i < num_vars; i++)
+	{
+	  addr_pair tgt_addr;
+	  tgt_addr.start = (uintptr_t) table[num_funcs+i*2];
+	  tgt_addr.end = tgt_addr.start + (uintptr_t) table[num_funcs+i*2+1];
+	  TRACE ("() var %d:\t0x%llx..0x%llx", i, tgt_addr.start, tgt_addr.end);
+	  curr_dev_table.push_back (tgt_addr);
+	}
+
+      dev_table.push_back (curr_dev_table);
+    }
+
+  address_table->insert (std::make_pair (target_image, dev_table));
+
   free (image);
+}
 
-  /* The func table contains only addresses, the var table contains addresses
-     and corresponding sizes.  */
-  int host_num_funcs = host_func_end - host_func_start;
-  int host_num_vars  = (host_var_end - host_var_start) / 2;
-  TRACE ("() host_num_funcs = %d, tgt_num_funcs = %d",
-	 host_num_funcs, tgt_num_funcs);
-  TRACE ("() host_num_vars = %d, tgt_num_vars = %d",
-	 host_num_vars, tgt_num_vars);
-  if (host_num_funcs != tgt_num_funcs)
-    {
-      fprintf (stderr, "%s: Can't map target functions\n", __FILE__);
-      exit (1);
-    }
-  if (host_num_vars != tgt_num_vars)
-    {
-      fprintf (stderr, "%s: Can't map target variables\n", __FILE__);
-      exit (1);
-    }
+/* Return the libgomp version number we're compatible with.  There is
+   no requirement for cross-version compatibility.  */
 
-  table = (mapping_table *) realloc (table, (table_size + host_num_funcs
-					     + host_num_vars)
-					    * sizeof (mapping_table));
+extern "C" unsigned
+GOMP_OFFLOAD_version (void)
+{
+  return GOMP_VERSION;
+}
+
+extern "C" int
+GOMP_OFFLOAD_load_image (int device, const unsigned version,
+			 void *target_image, addr_pair **result)
+{
+  TRACE ("(device = %d, target_image = %p)", device, target_image);
+
+  if (GOMP_VERSION_DEV (version) > GOMP_VERSION_INTEL_MIC)
+    GOMP_PLUGIN_fatal ("Offload data incompatible with intelmic plugin"
+		       " (expected %u, received %u)",
+		       GOMP_VERSION_INTEL_MIC, GOMP_VERSION_DEV (version));
+
+  /* If target_image is already present in address_table, then there is no need
+     to offload it.  */
+  if (address_table->count (target_image) == 0)
+    offload_image (target_image);
+
+  AddrVect *curr_dev_table = &(*address_table)[target_image][device];
+  int table_size = curr_dev_table->size ();
+  addr_pair *table = (addr_pair *) malloc (table_size * sizeof (addr_pair));
   if (table == NULL)
     {
       fprintf (stderr, "%s: Can't allocate memory\n", __FILE__);
       exit (1);
     }
 
-  for (int i = 0; i < host_num_funcs; i++)
-    {
-      mapping_table t;
-      t.host_start = (uintptr_t) host_func_start[i];
-      t.host_end = t.host_start + 1;
-      t.tgt_start = (uintptr_t) tgt_table[i];
-      t.tgt_end = t.tgt_start + 1;
-
-      TRACE ("() lib %d, func %d:\t0x%llx -- 0x%llx",
-	     lib_num, i, t.host_start, t.tgt_start);
-
-      table[table_size++] = t;
-    }
-
-  for (int i = 0; i < host_num_vars * 2; i += 2)
-    {
-      mapping_table t;
-      t.host_start = (uintptr_t) host_var_start[i];
-      t.host_end = t.host_start + (uintptr_t) host_var_start[i+1];
-      t.tgt_start = (uintptr_t) tgt_table[tgt_num_funcs+i];
-      t.tgt_end = t.tgt_start + (uintptr_t) tgt_table[tgt_num_funcs+i+1];
-
-      TRACE ("() lib %d, var %d:\t0x%llx (%d) -- 0x%llx (%d)", lib_num, i/2,
-	     t.host_start, t.host_end - t.host_start,
-	     t.tgt_start, t.tgt_end - t.tgt_start);
-
-      table[table_size++] = t;
-    }
-
-  delete [] tgt_table;
+  std::copy (curr_dev_table->begin (), curr_dev_table->end (), table);
+  *result = table;
+  return table_size;
 }
 
-extern "C" int
-GOMP_OFFLOAD_get_table (int device, void *result)
+extern "C" void
+GOMP_OFFLOAD_unload_image (int device, unsigned version,
+			   const void *target_image)
 {
-  TRACE ("(num_libraries = %d)", num_libraries);
+  if (GOMP_VERSION_DEV (version) > GOMP_VERSION_INTEL_MIC)
+    return;
 
-  mapping_table *table = NULL;
-  int table_size = 0;
+  TRACE ("(device = %d, target_image = %p)", device, target_image);
 
-  for (int i = 0; i < num_libraries; i++)
-    load_lib_and_get_table (device, i, table, table_size);
+  /* TODO: Currently liboffloadmic doesn't support __offload_unregister_image
+     for libraries.  */
 
-  *(void **) result = table;
-  return table_size;
+  address_table->erase (target_image);
 }
 
 extern "C" void *
@@ -429,6 +475,29 @@ GOMP_OFFLOAD_dev2host (int device, void *host_ptr, const void *tgt_ptr,
 	   &vd2, &vd2g);
 
   return host_ptr;
+}
+
+extern "C" void *
+GOMP_OFFLOAD_dev2dev (int device, void *dst_ptr, const void *src_ptr,
+		      size_t size)
+{
+  TRACE ("(dst_ptr = %p, src_ptr = %p, size = %d)", dst_ptr, src_ptr, size);
+  if (!size)
+    return dst_ptr;
+
+  VarDesc vd1[3] = { vd_host2tgt, vd_host2tgt, vd_host2tgt };
+  vd1[0].ptr = &dst_ptr;
+  vd1[0].size = sizeof (void *);
+  vd1[1].ptr = &src_ptr;
+  vd1[1].size = sizeof (void *);
+  vd1[2].ptr = &size;
+  vd1[2].size = sizeof (size);
+  VarDesc2 vd1g[3] = { { "dst_ptr", 0 }, { "src_ptr", 0 }, { "size", 0 } };
+
+  offload (__FILE__, __LINE__, device, "__offload_target_tgt2tgt", 3, vd1,
+	   vd1g);
+
+  return dst_ptr;
 }
 
 extern "C" void

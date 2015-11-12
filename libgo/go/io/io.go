@@ -54,7 +54,7 @@ var ErrNoProgress = errors.New("multiple Read calls return no data or error")
 // An instance of this general case is that a Reader returning
 // a non-zero number of bytes at the end of the input stream may
 // return either err == EOF or err == nil.  The next Read should
-// return 0, EOF regardless.
+// return 0, EOF.
 //
 // Callers should always process the n > 0 bytes returned before
 // considering the error err.  Doing so correctly handles I/O errors
@@ -62,8 +62,11 @@ var ErrNoProgress = errors.New("multiple Read calls return no data or error")
 // allowed EOF behaviors.
 //
 // Implementations of Read are discouraged from returning a
-// zero byte count with a nil error, and callers should treat
-// that situation as a no-op.
+// zero byte count with a nil error, except when len(p) == 0.
+// Callers should treat a return of 0 and nil as indicating that
+// nothing happened; in particular it does not indicate EOF.
+//
+// Implementations must not retain p.
 type Reader interface {
 	Read(p []byte) (n int, err error)
 }
@@ -75,6 +78,8 @@ type Reader interface {
 // and any error encountered that caused the write to stop early.
 // Write must return a non-nil error if it returns n < len(p).
 // Write must not modify the slice data, even temporarily.
+//
+// Implementations must not retain p.
 type Writer interface {
 	Write(p []byte) (n int, err error)
 }
@@ -192,6 +197,8 @@ type WriterTo interface {
 //
 // Clients of ReadAt can execute parallel ReadAt calls on the
 // same input source.
+//
+// Implementations must not retain p.
 type ReaderAt interface {
 	ReadAt(p []byte, off int64) (n int, err error)
 }
@@ -209,6 +216,8 @@ type ReaderAt interface {
 //
 // Clients of WriteAt can execute parallel WriteAt calls on the same
 // destination if the ranges do not overlap.
+//
+// Implementations must not retain p.
 type WriterAt interface {
 	WriteAt(p []byte, off int64) (n int, err error)
 }
@@ -264,8 +273,8 @@ type stringWriter interface {
 	WriteString(s string) (n int, err error)
 }
 
-// WriteString writes the contents of the string s to w, which accepts an array of bytes.
-// If w already implements a WriteString method, it is invoked directly.
+// WriteString writes the contents of the string s to w, which accepts a slice of bytes.
+// If w implements a WriteString method, it is invoked directly.
 func WriteString(w Writer, s string) (n int, err error) {
 	if sw, ok := w.(stringWriter); ok {
 		return sw.WriteString(s)
@@ -339,6 +348,23 @@ func CopyN(dst Writer, src Reader, n int64) (written int64, err error) {
 // Otherwise, if dst implements the ReaderFrom interface,
 // the copy is implemented by calling dst.ReadFrom(src).
 func Copy(dst Writer, src Reader) (written int64, err error) {
+	return copyBuffer(dst, src, nil)
+}
+
+// CopyBuffer is identical to Copy except that it stages through the
+// provided buffer (if one is required) rather than allocating a
+// temporary one. If buf is nil, one is allocated; otherwise if it has
+// zero length, CopyBuffer panics.
+func CopyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
+	if buf != nil && len(buf) == 0 {
+		panic("empty buffer in io.CopyBuffer")
+	}
+	return copyBuffer(dst, src, buf)
+}
+
+// copyBuffer is the actual implementation of Copy and CopyBuffer.
+// if buf is nil, one is allocated.
+func copyBuffer(dst Writer, src Reader, buf []byte) (written int64, err error) {
 	// If the reader has a WriteTo method, use it to do the copy.
 	// Avoids an allocation and a copy.
 	if wt, ok := src.(WriterTo); ok {
@@ -348,7 +374,9 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 	if rt, ok := dst.(ReaderFrom); ok {
 		return rt.ReadFrom(src)
 	}
-	buf := make([]byte, 32*1024)
+	if buf == nil {
+		buf = make([]byte, 32*1024)
+	}
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {

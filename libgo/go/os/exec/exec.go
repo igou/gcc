@@ -32,6 +32,9 @@ func (e *Error) Error() string {
 }
 
 // Cmd represents an external command being prepared or run.
+//
+// A Cmd cannot be reused after calling its Run, Output or CombinedOutput
+// methods.
 type Cmd struct {
 	// Path is the path of the command to run.
 	//
@@ -55,8 +58,15 @@ type Cmd struct {
 	// calling process's current directory.
 	Dir string
 
-	// Stdin specifies the process's standard input. If Stdin is
-	// nil, the process reads from the null device (os.DevNull).
+	// Stdin specifies the process's standard input.
+	// If Stdin is nil, the process reads from the null device (os.DevNull).
+	// If Stdin is an *os.File, the process's standard input is connected
+	// directly to that file.
+	// Otherwise, during the execution of the command a separate
+	// goroutine reads from Stdin and delivers that data to the command
+	// over a pipe. In this case, Wait does not complete until the goroutine
+	// stops copying, either because it has reached the end of Stdin
+	// (EOF or a read error) or because writing to the pipe returned an error.
 	Stdin io.Reader
 
 	// Stdout and Stderr specify the process's standard output and error.
@@ -73,8 +83,8 @@ type Cmd struct {
 	// new process. It does not include standard input, standard output, or
 	// standard error. If non-nil, entry i becomes file descriptor 3+i.
 	//
-	// BUG: on OS X 10.6, child processes may sometimes inherit unwanted fds.
-	// http://golang.org/issue/2603
+	// BUG(rsc): On OS X 10.6, child processes may sometimes inherit unwanted fds.
+	// https://golang.org/issue/2603
 	ExtraFiles []*os.File
 
 	// SysProcAttr holds optional, operating system-specific attributes.
@@ -147,6 +157,11 @@ func (c *Cmd) argv() []string {
 	return []string{c.Path}
 }
 
+// skipStdinCopyError optionally specifies a function which reports
+// whether the provided the stdin copy error should be ignored.
+// It is non-nil everywhere but Plan 9, which lacks EPIPE. See exec_posix.go.
+var skipStdinCopyError func(error) bool
+
 func (c *Cmd) stdin() (f *os.File, err error) {
 	if c.Stdin == nil {
 		f, err = os.Open(os.DevNull)
@@ -170,6 +185,9 @@ func (c *Cmd) stdin() (f *os.File, err error) {
 	c.closeAfterWait = append(c.closeAfterWait, pw)
 	c.goroutine = append(c.goroutine, func() error {
 		_, err := io.Copy(pw, c.Stdin)
+		if skip := skipStdinCopyError; skip != nil && skip(err) {
+			err = nil
+		}
 		if err1 := pw.Close(); err == nil {
 			err = err1
 		}
@@ -212,6 +230,7 @@ func (c *Cmd) writerDescriptor(w io.Writer) (f *os.File, err error) {
 	c.closeAfterWait = append(c.closeAfterWait, pr)
 	c.goroutine = append(c.goroutine, func() error {
 		_, err := io.Copy(w, pr)
+		pr.Close() // in case io.Copy stopped due to write error
 		return err
 	})
 	return pw, nil
@@ -345,6 +364,10 @@ func (e *ExitError) Error() string {
 // error is of type *ExitError. Other error types may be
 // returned for I/O problems.
 //
+// If c.Stdin is not an *os.File, Wait also waits for the I/O loop
+// copying from c.Stdin into the process's standard input
+// to complete.
+//
 // Wait releases any resources associated with the Cmd.
 func (c *Cmd) Wait() error {
 	if c.Process == nil {
@@ -358,7 +381,7 @@ func (c *Cmd) Wait() error {
 	c.ProcessState = state
 
 	var copyError error
-	for _ = range c.goroutine {
+	for range c.goroutine {
 		if err := <-c.errch; err != nil && copyError == nil {
 			copyError = err
 		}

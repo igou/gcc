@@ -4,7 +4,10 @@
 
 package net
 
-import "time"
+import (
+	"internal/singleflight"
+	"time"
+)
 
 // protocols contains minimal mappings between internet protocol
 // names and numbers for platforms that don't have a complete list of
@@ -22,75 +25,107 @@ var protocols = map[string]int{
 // LookupHost looks up the given host using the local resolver.
 // It returns an array of that host's addresses.
 func LookupHost(host string) (addrs []string, err error) {
+	// Make sure that no matter what we do later, host=="" is rejected.
+	// ParseIP, for example, does accept empty strings.
+	if host == "" {
+		return nil, &DNSError{Err: errNoSuchHost.Error(), Name: host}
+	}
+	if ip := ParseIP(host); ip != nil {
+		return []string{host}, nil
+	}
 	return lookupHost(host)
 }
 
 // LookupIP looks up host using the local resolver.
 // It returns an array of that host's IPv4 and IPv6 addresses.
-func LookupIP(host string) (addrs []IP, err error) {
-	return lookupIPMerge(host)
+func LookupIP(host string) (ips []IP, err error) {
+	// Make sure that no matter what we do later, host=="" is rejected.
+	// ParseIP, for example, does accept empty strings.
+	if host == "" {
+		return nil, &DNSError{Err: errNoSuchHost.Error(), Name: host}
+	}
+	if ip := ParseIP(host); ip != nil {
+		return []IP{ip}, nil
+	}
+	addrs, err := lookupIPMerge(host)
+	if err != nil {
+		return
+	}
+	ips = make([]IP, len(addrs))
+	for i, addr := range addrs {
+		ips[i] = addr.IP
+	}
+	return
 }
 
-var lookupGroup singleflight
+var lookupGroup singleflight.Group
 
 // lookupIPMerge wraps lookupIP, but makes sure that for any given
 // host, only one lookup is in-flight at a time. The returned memory
 // is always owned by the caller.
-func lookupIPMerge(host string) (addrs []IP, err error) {
+func lookupIPMerge(host string) (addrs []IPAddr, err error) {
 	addrsi, err, shared := lookupGroup.Do(host, func() (interface{}, error) {
-		return lookupIP(host)
+		return testHookLookupIP(lookupIP, host)
 	})
+	return lookupIPReturn(addrsi, err, shared)
+}
+
+// lookupIPReturn turns the return values from singleflight.Do into
+// the return values from LookupIP.
+func lookupIPReturn(addrsi interface{}, err error, shared bool) ([]IPAddr, error) {
 	if err != nil {
 		return nil, err
 	}
-	addrs = addrsi.([]IP)
+	addrs := addrsi.([]IPAddr)
 	if shared {
-		clone := make([]IP, len(addrs))
+		clone := make([]IPAddr, len(addrs))
 		copy(clone, addrs)
 		addrs = clone
 	}
 	return addrs, nil
 }
 
-func lookupIPDeadline(host string, deadline time.Time) (addrs []IP, err error) {
+// lookupIPDeadline looks up a hostname with a deadline.
+func lookupIPDeadline(host string, deadline time.Time) (addrs []IPAddr, err error) {
 	if deadline.IsZero() {
 		return lookupIPMerge(host)
 	}
 
-	// TODO(bradfitz): consider pushing the deadline down into the
-	// name resolution functions. But that involves fixing it for
-	// the native Go resolver, cgo, Windows, etc.
-	//
-	// In the meantime, just use a goroutine. Most users affected
-	// by http://golang.org/issue/2631 are due to TCP connections
-	// to unresponsive hosts, not DNS.
+	// We could push the deadline down into the name resolution
+	// functions.  However, the most commonly used implementation
+	// calls getaddrinfo, which has no timeout.
+
 	timeout := deadline.Sub(time.Now())
 	if timeout <= 0 {
-		err = errTimeout
-		return
+		return nil, errTimeout
 	}
 	t := time.NewTimer(timeout)
 	defer t.Stop()
-	type res struct {
-		addrs []IP
-		err   error
-	}
-	resc := make(chan res, 1)
-	go func() {
-		a, err := lookupIPMerge(host)
-		resc <- res{a, err}
-	}()
+
+	ch := lookupGroup.DoChan(host, func() (interface{}, error) {
+		return testHookLookupIP(lookupIP, host)
+	})
+
 	select {
 	case <-t.C:
-		err = errTimeout
-	case r := <-resc:
-		addrs, err = r.addrs, r.err
+		// The DNS lookup timed out for some reason.  Force
+		// future requests to start the DNS lookup again
+		// rather than waiting for the current lookup to
+		// complete.  See issue 8602.
+		lookupGroup.Forget(host)
+
+		return nil, errTimeout
+
+	case r := <-ch:
+		return lookupIPReturn(r.Val, r.Err, r.Shared)
 	}
-	return
 }
 
 // LookupPort looks up the port for the given network and service.
 func LookupPort(network, service string) (port int, err error) {
+	if n, i, ok := dtoi(service, 0); ok && i == len(service) {
+		return n, nil
+	}
 	return lookupPort(network, service)
 }
 
@@ -116,22 +151,22 @@ func LookupSRV(service, proto, name string) (cname string, addrs []*SRV, err err
 }
 
 // LookupMX returns the DNS MX records for the given domain name sorted by preference.
-func LookupMX(name string) (mx []*MX, err error) {
+func LookupMX(name string) (mxs []*MX, err error) {
 	return lookupMX(name)
 }
 
 // LookupNS returns the DNS NS records for the given domain name.
-func LookupNS(name string) (ns []*NS, err error) {
+func LookupNS(name string) (nss []*NS, err error) {
 	return lookupNS(name)
 }
 
 // LookupTXT returns the DNS TXT records for the given domain name.
-func LookupTXT(name string) (txt []string, err error) {
+func LookupTXT(name string) (txts []string, err error) {
 	return lookupTXT(name)
 }
 
 // LookupAddr performs a reverse lookup for the given address, returning a list
 // of names mapping to that address.
-func LookupAddr(addr string) (name []string, err error) {
+func LookupAddr(addr string) (names []string, err error) {
 	return lookupAddr(addr)
 }

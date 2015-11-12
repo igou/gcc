@@ -1,5 +1,5 @@
 /* Language-level data type conversion for GNU C++.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
    Hacked by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -27,16 +27,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "tree.h"
+#include "target.h"
+#include "cp-tree.h"
 #include "stor-layout.h"
 #include "flags.h"
-#include "cp-tree.h"
 #include "intl.h"
 #include "convert.h"
-#include "decl.h"
-#include "target.h"
-#include "wide-int.h"
 
 static tree cp_convert_to_pointer (tree, tree, tsubst_flags_t);
 static tree convert_to_pointer_force (tree, tree, tsubst_flags_t);
@@ -595,8 +591,20 @@ ignore_overflows (tree expr, tree orig)
 tree
 cp_fold_convert (tree type, tree expr)
 {
-  tree conv = fold_convert (type, expr);
-  conv = ignore_overflows (conv, expr);
+  tree conv;
+  if (TREE_TYPE (expr) == type)
+    conv = expr;
+  else if (TREE_CODE (expr) == PTRMEM_CST)
+    {
+      /* Avoid wrapping a PTRMEM_CST in NOP_EXPR.  */
+      conv = copy_node (expr);
+      TREE_TYPE (conv) = type;
+    }
+  else
+    {
+      conv = fold_convert (type, expr);
+      conv = ignore_overflows (conv, expr);
+    }
   return conv;
 }
 
@@ -675,7 +683,8 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
     }
 
   /* FIXME remove when moving to c_fully_fold model.  */
-  e = scalar_constant_value (e);
+  if (!CLASS_TYPE_P (type))
+    e = scalar_constant_value (e);
   if (error_operand_p (e))
     return error_mark_node;
 
@@ -695,7 +704,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 	 conversion.  */
       else if (TREE_CODE (type) == COMPLEX_TYPE)
 	return fold_if_not_in_template (convert_to_complex (type, e));
-      else if (TREE_CODE (type) == VECTOR_TYPE)
+      else if (VECTOR_TYPE_P (type))
 	return fold_if_not_in_template (convert_to_vector (type, e));
       else if (TREE_CODE (e) == TARGET_EXPR)
 	{
@@ -882,7 +891,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
     {
       /* If the conversion failed and expr was an invalid use of pointer to
 	 member function, try to report a meaningful error.  */
-      if (invalid_nonstatic_memfn_p (expr, complain))
+      if (invalid_nonstatic_memfn_p (loc, expr, complain))
 	/* We displayed the error message.  */;
       else
 	error_at (loc, "conversion from %qT to non-scalar type %qT requested",
@@ -940,7 +949,7 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 
   if (!TREE_TYPE (expr))
     return expr;
-  if (invalid_nonstatic_memfn_p (expr, complain))
+  if (invalid_nonstatic_memfn_p (loc, expr, complain))
     return error_mark_node;
   if (TREE_CODE (expr) == PSEUDO_DTOR_EXPR)
     {
@@ -1776,4 +1785,37 @@ perform_qualification_conversions (tree type, tree expr)
     return build_nop (type, expr);
   else
     return error_mark_node;
+}
+
+/* True iff T is a transaction-safe function type.  */
+
+bool
+tx_safe_fn_type_p (tree t)
+{
+  if (TREE_CODE (t) != FUNCTION_TYPE
+      && TREE_CODE (t) != METHOD_TYPE)
+    return false;
+  return !!lookup_attribute ("transaction_safe", TYPE_ATTRIBUTES (t));
+}
+
+/* Return the transaction-unsafe variant of transaction-safe function type
+   T.  */
+
+tree
+tx_unsafe_fn_variant (tree t)
+{
+  gcc_assert (tx_safe_fn_type_p (t));
+  tree attrs = remove_attribute ("transaction_safe",
+				 TYPE_ATTRIBUTES (t));
+  return cp_build_type_attribute_variant (t, attrs);
+}
+
+/* Return true iff FROM can convert to TO by a transaction-safety
+   conversion.  */
+
+bool
+can_convert_tx_safety (tree to, tree from)
+{
+  return (flag_tm && tx_safe_fn_type_p (from)
+	  && same_type_p (to, tx_unsafe_fn_variant (from)));
 }

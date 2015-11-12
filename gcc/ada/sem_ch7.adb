@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -28,43 +28,45 @@
 --  handling of private and full declarations, and the construction of dispatch
 --  tables for tagged types.
 
-with Aspects;  use Aspects;
-with Atree;    use Atree;
-with Debug;    use Debug;
-with Einfo;    use Einfo;
-with Elists;   use Elists;
-with Errout;   use Errout;
-with Exp_Disp; use Exp_Disp;
-with Exp_Dist; use Exp_Dist;
-with Exp_Dbug; use Exp_Dbug;
-with Lib;      use Lib;
-with Lib.Xref; use Lib.Xref;
-with Namet;    use Namet;
-with Nmake;    use Nmake;
-with Nlists;   use Nlists;
-with Opt;      use Opt;
-with Output;   use Output;
-with Restrict; use Restrict;
-with Sem;      use Sem;
-with Sem_Aux;  use Sem_Aux;
-with Sem_Cat;  use Sem_Cat;
-with Sem_Ch3;  use Sem_Ch3;
-with Sem_Ch6;  use Sem_Ch6;
-with Sem_Ch8;  use Sem_Ch8;
-with Sem_Ch10; use Sem_Ch10;
-with Sem_Ch12; use Sem_Ch12;
-with Sem_Ch13; use Sem_Ch13;
-with Sem_Disp; use Sem_Disp;
-with Sem_Eval; use Sem_Eval;
-with Sem_Prag; use Sem_Prag;
-with Sem_Util; use Sem_Util;
-with Sem_Warn; use Sem_Warn;
-with Snames;   use Snames;
-with Stand;    use Stand;
-with Sinfo;    use Sinfo;
-with Sinput;   use Sinput;
+with Aspects;   use Aspects;
+with Atree;     use Atree;
+with Contracts; use Contracts;
+with Debug;     use Debug;
+with Einfo;     use Einfo;
+with Elists;    use Elists;
+with Errout;    use Errout;
+with Exp_Disp;  use Exp_Disp;
+with Exp_Dist;  use Exp_Dist;
+with Exp_Dbug;  use Exp_Dbug;
+with Ghost;     use Ghost;
+with Lib;       use Lib;
+with Lib.Xref;  use Lib.Xref;
+with Namet;     use Namet;
+with Nmake;     use Nmake;
+with Nlists;    use Nlists;
+with Opt;       use Opt;
+with Output;    use Output;
+with Restrict;  use Restrict;
+with Sem;       use Sem;
+with Sem_Aux;   use Sem_Aux;
+with Sem_Cat;   use Sem_Cat;
+with Sem_Ch3;   use Sem_Ch3;
+with Sem_Ch6;   use Sem_Ch6;
+with Sem_Ch8;   use Sem_Ch8;
+with Sem_Ch10;  use Sem_Ch10;
+with Sem_Ch12;  use Sem_Ch12;
+with Sem_Ch13;  use Sem_Ch13;
+with Sem_Disp;  use Sem_Disp;
+with Sem_Eval;  use Sem_Eval;
+with Sem_Prag;  use Sem_Prag;
+with Sem_Util;  use Sem_Util;
+with Sem_Warn;  use Sem_Warn;
+with Snames;    use Snames;
+with Stand;     use Stand;
+with Sinfo;     use Sinfo;
+with Sinput;    use Sinput;
 with Style;
-with Uintp;    use Uintp;
+with Uintp;     use Uintp;
 
 package body Sem_Ch7 is
 
@@ -181,47 +183,6 @@ package body Sem_Ch7 is
       end if;
    end Analyze_Package_Body;
 
-   -----------------------------------
-   -- Analyze_Package_Body_Contract --
-   -----------------------------------
-
-   procedure Analyze_Package_Body_Contract (Body_Id : Entity_Id) is
-      Spec_Id : constant Entity_Id := Spec_Entity (Body_Id);
-      Mode    : SPARK_Mode_Type;
-      Prag    : Node_Id;
-
-   begin
-      --  Due to the timing of contract analysis, delayed pragmas may be
-      --  subject to the wrong SPARK_Mode, usually that of the enclosing
-      --  context. To remedy this, restore the original SPARK_Mode of the
-      --  related package body.
-
-      Save_SPARK_Mode_And_Set (Body_Id, Mode);
-
-      Prag := Get_Pragma (Body_Id, Pragma_Refined_State);
-
-      --  The analysis of pragma Refined_State detects whether the spec has
-      --  abstract states available for refinement.
-
-      if Present (Prag) then
-         Analyze_Refined_State_In_Decl_Part (Prag);
-
-      --  State refinement is required when the package declaration defines at
-      --  least one abstract state. Null states are not considered. Refinement
-      --  is not envorced when SPARK checks are turned off.
-
-      elsif SPARK_Mode /= Off
-        and then Requires_State_Refinement (Spec_Id, Body_Id)
-      then
-         Error_Msg_N ("package & requires state refinement", Spec_Id);
-      end if;
-
-      --  Restore the SPARK_Mode of the enclosing context after all delayed
-      --  pragmas have been analyzed.
-
-      Restore_SPARK_Mode (Mode);
-   end Analyze_Package_Body_Contract;
-
    ---------------------------------
    -- Analyze_Package_Body_Helper --
    ---------------------------------
@@ -296,6 +257,7 @@ package body Sem_Ch7 is
 
                elsif Nkind (N) = N_Attribute_Reference
                  and then Is_Entity_Name (Prefix (N))
+                 and then Present (Entity (Prefix (N)))
                  and then Is_Subprogram (Entity (Prefix (N)))
                then
                   Reference_Seen := True;
@@ -569,6 +531,7 @@ package body Sem_Ch7 is
 
       --  Local variables
 
+      Save_Ghost_Mode  : constant Ghost_Mode_Type := Ghost_Mode;
       Body_Id          : Entity_Id;
       HSS              : Node_Id;
       Last_Spec_Entity : Entity_Id;
@@ -579,6 +542,34 @@ package body Sem_Ch7 is
    --  Start of processing for Analyze_Package_Body_Helper
 
    begin
+      --  A [generic] package body "freezes" the contract of the nearest
+      --  enclosing package body:
+
+      --    package body Nearest_Enclosing_Package
+      --      with Refined_State => (State => Constit)
+      --    is
+      --       Constit : ...;
+
+      --       package body Freezes_Enclosing_Package_Body
+      --         with Refined_State => (State_2 => Constit_2)
+      --       is
+      --          Constit_2 : ...;
+
+      --          procedure Proc
+      --            with Refined_Depends => (Input => (Constit, Constit_2)) ...
+
+      --  This ensures that any annotations referenced by the contract of a
+      --  [generic] subprogram body declared within the current package body
+      --  are available. This form of "freezing" is decoupled from the usual
+      --  Freeze_xxx mechanism because it must also work in the context of
+      --  generics where normal freezing is disabled.
+
+      --  Only bodies coming from source should cause this type of "freezing"
+
+      if Comes_From_Source (N) then
+         Analyze_Enclosing_Package_Body_Contract (N);
+      end if;
+
       --  Find corresponding package specification, and establish the current
       --  scope. The visible defining entity for the package is the defining
       --  occurrence in the spec. On exit from the package body, all body
@@ -634,6 +625,12 @@ package body Sem_Ch7 is
          end if;
       end if;
 
+      --  A package body is Ghost when the corresponding spec is Ghost. Set
+      --  the mode now to ensure that any nodes generated during analysis and
+      --  expansion are properly flagged as ignored Ghost.
+
+      Set_Ghost_Mode (N, Spec_Id);
+
       Set_Is_Compilation_Unit (Body_Id, Is_Compilation_Unit (Spec_Id));
       Style.Check_Identifier (Body_Id, Spec_Id);
 
@@ -668,6 +665,13 @@ package body Sem_Ch7 is
 
          Exchange_Aspects (N, New_N);
 
+         --  Collect all contract-related source pragmas found within the
+         --  template and attach them to the contract of the package body.
+         --  This contract is used in the capture of global references within
+         --  annotations.
+
+         Create_Generic_Contract (N);
+
          --  Update Body_Id to point to the copied node for the remainder of
          --  the processing.
 
@@ -682,7 +686,6 @@ package body Sem_Ch7 is
       Set_Ekind (Body_Id, E_Package_Body);
       Set_Body_Entity (Spec_Id, Body_Id);
       Set_Spec_Entity (Body_Id, Spec_Id);
-      Set_Contract    (Body_Id, Make_Contract (Sloc (Body_Id)));
 
       --  Defining name for the package body is not a visible entity: Only the
       --  defining name for the declaration is visible.
@@ -715,27 +718,21 @@ package body Sem_Ch7 is
       --  Set SPARK_Mode only for non-generic package
 
       if Ekind (Spec_Id) = E_Package then
-
-         --  Set SPARK_Mode from context
-
-         Set_SPARK_Pragma (Body_Id, SPARK_Mode_Pragma);
-         Set_SPARK_Pragma_Inherited (Body_Id, True);
-
-         --  Set elaboration code SPARK mode the same for now
-
-         Set_SPARK_Aux_Pragma (Body_Id, SPARK_Pragma (Body_Id));
-         Set_SPARK_Aux_Pragma_Inherited (Body_Id, True);
+         Set_SPARK_Pragma               (Body_Id, SPARK_Mode_Pragma);
+         Set_SPARK_Aux_Pragma           (Body_Id, SPARK_Mode_Pragma);
+         Set_SPARK_Pragma_Inherited     (Body_Id);
+         Set_SPARK_Aux_Pragma_Inherited (Body_Id);
       end if;
 
-      --  Inherit the "ghostness" of the subprogram spec. Note that this
-      --  property is not directly inherited as the body may be subject to a
-      --  different Ghost assertion policy.
+      --  Inherit the "ghostness" of the package spec. Note that this property
+      --  is not directly inherited as the body may be subject to a different
+      --  Ghost assertion policy.
 
-      if Is_Ghost_Entity (Spec_Id) or else Within_Ghost_Scope then
+      if Ghost_Mode > None or else Is_Ghost_Entity (Spec_Id) then
          Set_Is_Ghost_Entity (Body_Id);
 
          --  The Ghost policy in effect at the point of declaration and at the
-         --  point of completion must match (SPARK RM 6.9(15)).
+         --  point of completion must match (SPARK RM 6.9(14)).
 
          Check_Ghost_Completion (Spec_Id, Body_Id);
       end if;
@@ -764,6 +761,14 @@ package body Sem_Ch7 is
         and then Scope (Spec_Id) /= Standard_Standard
       then
          Declare_Inherited_Private_Subprograms (Spec_Id);
+      end if;
+
+      --  A package body "freezes" the contract of its initial declaration.
+      --  This analysis depends on attribute Corresponding_Spec being set. Only
+      --  bodies coming from source shuld cause this type of "freezing".
+
+      if Comes_From_Source (N) then
+         Analyze_Initial_Declaration_Contract (N);
       end if;
 
       if Present (Declarations (N)) then
@@ -925,55 +930,9 @@ package body Sem_Ch7 is
             Qualify_Entity_Names (N);
          end if;
       end if;
+
+      Ghost_Mode := Save_Ghost_Mode;
    end Analyze_Package_Body_Helper;
-
-   ------------------------------
-   -- Analyze_Package_Contract --
-   ------------------------------
-
-   procedure Analyze_Package_Contract (Pack_Id : Entity_Id) is
-      Mode : SPARK_Mode_Type;
-      Prag : Node_Id;
-
-   begin
-      --  Due to the timing of contract analysis, delayed pragmas may be
-      --  subject to the wrong SPARK_Mode, usually that of the enclosing
-      --  context. To remedy this, restore the original SPARK_Mode of the
-      --  related package.
-
-      Save_SPARK_Mode_And_Set (Pack_Id, Mode);
-
-      --  Analyze the initialization related pragmas. Initializes must come
-      --  before Initial_Condition due to item dependencies.
-
-      Prag := Get_Pragma (Pack_Id, Pragma_Initializes);
-
-      if Present (Prag) then
-         Analyze_Initializes_In_Decl_Part (Prag);
-      end if;
-
-      Prag := Get_Pragma (Pack_Id, Pragma_Initial_Condition);
-
-      if Present (Prag) then
-         Analyze_Initial_Condition_In_Decl_Part (Prag);
-      end if;
-
-      --  Check whether the lack of indicator Part_Of agrees with the placement
-      --  of the package instantiation with respect to the state space.
-
-      if Is_Generic_Instance (Pack_Id) then
-         Prag := Get_Pragma (Pack_Id, Pragma_Part_Of);
-
-         if No (Prag) then
-            Check_Missing_Part_Of (Pack_Id);
-         end if;
-      end if;
-
-      --  Restore the SPARK_Mode of the enclosing context after all delayed
-      --  pragmas have been analyzed.
-
-      Restore_SPARK_Mode (Mode);
-   end Analyze_Package_Contract;
 
    ---------------------------------
    -- Analyze_Package_Declaration --
@@ -982,14 +941,14 @@ package body Sem_Ch7 is
    procedure Analyze_Package_Declaration (N : Node_Id) is
       Id : constant Node_Id := Defining_Entity (N);
 
-      PF : Boolean;
-      --  True when in the context of a declared pure library unit
-
       Body_Required : Boolean;
       --  True when this package declaration requires a corresponding body
 
       Comp_Unit : Boolean;
       --  True when this package declaration is not a nested declaration
+
+      PF : Boolean;
+      --  True when in the context of a declared pure library unit
 
    begin
       if Debug_Flag_C then
@@ -1003,17 +962,23 @@ package body Sem_Ch7 is
 
       Generate_Definition (Id);
       Enter_Name (Id);
-      Set_Ekind    (Id, E_Package);
-      Set_Etype    (Id, Standard_Void_Type);
-      Set_Contract (Id, Make_Contract (Sloc (Id)));
+      Set_Ekind  (Id, E_Package);
+      Set_Etype  (Id, Standard_Void_Type);
 
       --  Set SPARK_Mode from context only for non-generic package
 
       if Ekind (Id) = E_Package then
          Set_SPARK_Pragma               (Id, SPARK_Mode_Pragma);
          Set_SPARK_Aux_Pragma           (Id, SPARK_Mode_Pragma);
-         Set_SPARK_Pragma_Inherited     (Id, True);
-         Set_SPARK_Aux_Pragma_Inherited (Id, True);
+         Set_SPARK_Pragma_Inherited     (Id);
+         Set_SPARK_Aux_Pragma_Inherited (Id);
+      end if;
+
+      --  A package declared within a Ghost refion is automatically Ghost
+      --  (SPARK RM 6.9(2)).
+
+      if Ghost_Mode > None then
+         Set_Is_Ghost_Entity (Id);
       end if;
 
       --  Analyze aspect specifications immediately, since we need to recognize
@@ -1058,6 +1023,7 @@ package body Sem_Ch7 is
       end if;
 
       Comp_Unit := Nkind (Parent (N)) = N_Compilation_Unit;
+
       if Comp_Unit then
 
          --  Set Body_Required indication on the compilation unit node, and
@@ -1068,7 +1034,6 @@ package body Sem_Ch7 is
          if not Body_Required then
             Set_Suppress_Elaboration_Warnings (Id);
          end if;
-
       end if;
 
       End_Package_Scope (Id);
@@ -1469,7 +1434,7 @@ package body Sem_Ch7 is
             end if;
 
             --  If invariants are present, build the invariant procedure for a
-            --  private type, but not any of its subtypes.
+            --  private type, but not any of its subtypes or interface types.
 
             if Has_Invariants (E) then
                if Ekind (E) = E_Private_Subtype then
@@ -1652,23 +1617,42 @@ package body Sem_Ch7 is
          if Is_Type (E)
            and then Has_Private_Declaration (E)
            and then Nkind (Parent (E)) = N_Full_Type_Declaration
-           and then Has_Aspects (Parent (E))
          then
             declare
-               ASN : Node_Id;
+               IP_Built : Boolean := False;
 
             begin
-               ASN := First (Aspect_Specifications (Parent (E)));
-               while Present (ASN) loop
-                  if Nam_In (Chars (Identifier (ASN)), Name_Invariant,
-                                                       Name_Type_Invariant)
-                  then
-                     Build_Invariant_Procedure (E, N);
-                     exit;
-                  end if;
+               if Has_Aspects (Parent (E)) then
+                  declare
+                     ASN : Node_Id;
 
-                  Next (ASN);
-               end loop;
+                  begin
+                     ASN := First (Aspect_Specifications (Parent (E)));
+                     while Present (ASN) loop
+                        if Nam_In (Chars (Identifier (ASN)),
+                             Name_Invariant,
+                             Name_Type_Invariant)
+                        then
+                           Build_Invariant_Procedure (E, N);
+                           IP_Built := True;
+                           exit;
+                        end if;
+
+                        Next (ASN);
+                     end loop;
+                  end;
+               end if;
+
+               --  Invariants may have been inherited from progenitors
+
+               if not IP_Built
+                 and then Has_Interfaces (E)
+                 and then Has_Inheritable_Invariants (E)
+                 and then not Is_Interface (E)
+                 and then not Is_Class_Wide_Type (E)
+               then
+                  Build_Invariant_Procedure (E, N);
+               end if;
             end;
          end if;
 
@@ -1758,8 +1742,8 @@ package body Sem_Ch7 is
    --------------------------------------
 
    procedure Analyze_Private_Type_Declaration (N : Node_Id) is
-      PF : constant Boolean   := Is_Pure (Enclosing_Lib_Unit_Entity);
       Id : constant Entity_Id := Defining_Identifier (N);
+      PF : constant Boolean   := Is_Pure (Enclosing_Lib_Unit_Entity);
 
    begin
       Generate_Definition (Id);
@@ -1775,10 +1759,10 @@ package body Sem_Ch7 is
       New_Private_Type (N, Id, N);
       Set_Depends_On_Private (Id);
 
-      --  A type declared within a Ghost scope is automatically Ghost
+      --  A type declared within a Ghost region is automatically Ghost
       --  (SPARK RM 6.9(2)).
 
-      if Within_Ghost_Scope then
+      if Ghost_Mode > None then
          Set_Is_Ghost_Entity (Id);
       end if;
 
@@ -1968,7 +1952,7 @@ package body Sem_Ch7 is
                        and then Present (DTC_Entity (Alias (Prim_Op)))
                      then
                         Set_DTC_Entity_Value (E, New_Op);
-                        Set_DT_Position (New_Op,
+                        Set_DT_Position_Value (New_Op,
                           DT_Position (Alias (Prim_Op)));
                      end if;
 
@@ -2156,9 +2140,19 @@ package body Sem_Ch7 is
                --  swap them out in End_Package_Scope.
 
                Replace_Elmt (Priv_Elmt, Full_View (Priv));
+
+               --  Ensure that both views of the dependent private subtype are
+               --  immediately visible if within some open scope. Check full
+               --  view before exchanging views.
+
+               if In_Open_Scopes (Scope (Full_View (Priv))) then
+                  Set_Is_Immediately_Visible (Priv);
+               end if;
+
                Exchange_Declarations (Priv);
                Set_Is_Immediately_Visible
                  (Priv, In_Open_Scopes (Scope (Priv)));
+
                Set_Is_Potentially_Use_Visible
                  (Priv, Is_Potentially_Use_Visible (Node (Priv_Elmt)));
 
@@ -2460,12 +2454,6 @@ package body Sem_Ch7 is
         and then Nkind (Original_Node (Unit_Declaration_Node (Id))) =
                                                    N_Formal_Package_Declaration
       then
-         return False;
-
-      --  A Ghost entity declared in a non-Ghost package does not force the
-      --  need for a body (SPARK RM 6.9(11)).
-
-      elsif not Is_Ghost_Entity (Pack_Id) and then Is_Ghost_Entity (Id) then
          return False;
 
       --  Otherwise test to see if entity requires a completion. Note that
@@ -2839,8 +2827,8 @@ package body Sem_Ch7 is
             --  The following test may be redundant, as this is already
             --  diagnosed in sem_ch3. ???
 
-            if Is_Indefinite_Subtype (Full)
-              and then not Is_Indefinite_Subtype (Id)
+            if not Is_Definite_Subtype (Full)
+              and then Is_Definite_Subtype (Id)
             then
                Error_Msg_Sloc := Sloc (Parent (Id));
                Error_Msg_NE

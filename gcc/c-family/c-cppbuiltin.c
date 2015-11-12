@@ -1,5 +1,5 @@
 /* Define builtin-in macros for the C family front ends.
-   Copyright (C) 2002-2014 Free Software Foundation, Inc.
+   Copyright (C) 2002-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,18 +20,15 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "tree.h"
-#include "stor-layout.h"
-#include "stringpool.h"
-#include "version.h"
-#include "flags.h"
+#include "target.h"
 #include "c-common.h"
+#include "tm_p.h"		/* For TARGET_CPU_CPP_BUILTINS & friends.  */
+#include "stringpool.h"
+#include "stor-layout.h"
+#include "flags.h"
 #include "c-pragma.h"
 #include "output.h"		/* For user_label_prefix.  */
 #include "debug.h"		/* For dwarf2out_do_cfi_asm.  */
-#include "tm_p.h"		/* For TARGET_CPU_CPP_BUILTINS & friends.  */
-#include "target.h"
 #include "common/common-target.h"
 #include "cpp-id-data.h"
 #include "cppbuiltin.h"
@@ -49,8 +46,6 @@ along with GCC; see the file COPYING3.  If not see
 #endif
 
 /* Non-static as some targets don't use it.  */
-void builtin_define_std (const char *) ATTRIBUTE_UNUSED;
-static void builtin_define_with_int_value (const char *, HOST_WIDE_INT);
 static void builtin_define_with_hex_fp_value (const char *, tree,
 					      int, const char *,
 					      const char *,
@@ -59,7 +54,6 @@ static void builtin_define_stdint_macros (void);
 static void builtin_define_constants (const char *, tree);
 static void builtin_define_type_max (const char *, tree);
 static void builtin_define_type_minmax (const char *, const char *, tree);
-static void builtin_define_type_sizeof (const char *, tree);
 static void builtin_define_float_constants (const char *,
 					    const char *,
 					    const char *,
@@ -104,7 +98,7 @@ mode_has_fma (machine_mode mode)
 }
 
 /* Define NAME with value TYPE size_unit.  */
-static void
+void
 builtin_define_type_sizeof (const char *name, tree type)
 {
   builtin_define_with_int_value (name,
@@ -800,11 +794,6 @@ c_cpp_builtins (cpp_reader *pfile)
   cpp_define (pfile, "__has_include(STR)=__has_include__(STR)");
   cpp_define (pfile, "__has_include_next(STR)=__has_include_next__(STR)");
 
-  /* Set attribute test macros for all C/C++ (not for just C++11 etc.)
-     The builtin __has_attribute__ is defined in libcpp.  */
-  cpp_define (pfile, "__has_attribute(STR)=__has_attribute__(STR)");
-  cpp_define (pfile, "__has_cpp_attribute(STR)=__has_attribute__(STR)");
-
   if (c_dialect_cxx ())
     {
       if (flag_weak && SUPPORTS_ONE_ONLY)
@@ -839,8 +828,9 @@ c_cpp_builtins (cpp_reader *pfile)
 
       if (cxx_dialect >= cxx11)
 	{
-	  /* Set feature test macros for C++11  */
-	  cpp_define (pfile, "__cpp_unicode_characters=200704");
+	  /* Set feature test macros for C++11.  */
+	  if (cxx_dialect <= cxx14)
+	    cpp_define (pfile, "__cpp_unicode_characters=200704");
 	  cpp_define (pfile, "__cpp_raw_strings=200710");
 	  cpp_define (pfile, "__cpp_unicode_literals=200710");
 	  cpp_define (pfile, "__cpp_user_defined_literals=200809");
@@ -848,7 +838,8 @@ c_cpp_builtins (cpp_reader *pfile)
 	  if (cxx_dialect == cxx11)
 	    cpp_define (pfile, "__cpp_constexpr=200704");
 	  cpp_define (pfile, "__cpp_range_based_for=200907");
-	  cpp_define (pfile, "__cpp_static_assert=200410");
+	  if (cxx_dialect <= cxx14)
+	    cpp_define (pfile, "__cpp_static_assert=200410");
 	  cpp_define (pfile, "__cpp_decltype=200707");
 	  cpp_define (pfile, "__cpp_attributes=200809");
 	  cpp_define (pfile, "__cpp_rvalue_reference=200610");
@@ -862,7 +853,7 @@ c_cpp_builtins (cpp_reader *pfile)
 	}
       if (cxx_dialect > cxx11)
 	{
-	  /* Set feature test macros for C++14  */
+	  /* Set feature test macros for C++14.  */
 	  cpp_define (pfile, "__cpp_return_type_deduction=201304");
 	  cpp_define (pfile, "__cpp_init_captures=201304");
 	  cpp_define (pfile, "__cpp_generic_lambdas=201304");
@@ -871,8 +862,28 @@ c_cpp_builtins (cpp_reader *pfile)
 	  cpp_define (pfile, "__cpp_aggregate_nsdmi=201304");
 	  cpp_define (pfile, "__cpp_variable_templates=201304");
 	  cpp_define (pfile, "__cpp_digit_separators=201309");
-	  //cpp_define (pfile, "__cpp_sized_deallocation=201309");
 	}
+      if (cxx_dialect > cxx14)
+	{
+	  /* Set feature test macros for C++1z.  */
+	  cpp_define (pfile, "__cpp_unicode_characters=201411");
+	  cpp_define (pfile, "__cpp_static_assert=201411");
+	  cpp_define (pfile, "__cpp_namespace_attributes=201411");
+	  cpp_define (pfile, "__cpp_enumerator_attributes=201411");
+	  cpp_define (pfile, "__cpp_nested_namespace_definitions=201411");
+	  cpp_define (pfile, "__cpp_fold_expressions=201411");
+	  cpp_define (pfile, "__cpp_nontype_template_args=201411");
+	}
+      if (flag_concepts)
+	/* Use a value smaller than the 201507 specified in
+	   the TS, since we don't yet support extended auto.  */
+	cpp_define (pfile, "__cpp_concepts=201500");
+      if (flag_tm)
+	/* Use a value smaller than the 201505 specified in
+	   the TS, since we don't yet support atomic_cancel.  */
+	cpp_define (pfile, "__cpp_transactional_memory=210500");
+      if (flag_sized_deallocation)
+	cpp_define (pfile, "__cpp_sized_deallocation=201309");
     }
   /* Note that we define this for C as well, so that we know if
      __attribute__((cleanup)) will interface with EH.  */
@@ -886,14 +897,8 @@ c_cpp_builtins (cpp_reader *pfile)
   /* Represents the C++ ABI version, always defined so it can be used while
      preprocessing C and assembler.  */
   if (flag_abi_version == 0)
-    /* Use a very large value so that:
-
-	 #if __GXX_ABI_VERSION >= <value for version X>
-
-       will work whether the user explicitly says "-fabi-version=x" or
-       "-fabi-version=0".  Do not use INT_MAX because that will be
-       different from system to system.  */
-    builtin_define_with_int_value ("__GXX_ABI_VERSION", 999999);
+    /* We should have set this to something real in c_common_post_options.  */
+    gcc_unreachable ();
   else if (flag_abi_version == 1)
     /* Due to a historical accident, this version had the value
        "102".  */
@@ -1139,9 +1144,8 @@ c_cpp_builtins (cpp_reader *pfile)
 				     TRAMPOLINE_SIZE);
 
       /* For libgcc generic-morestack.c and unwinder code.  */
-#ifdef STACK_GROWS_DOWNWARD
-      cpp_define (pfile, "__LIBGCC_STACK_GROWS_DOWNWARD__");
-#endif
+      if (STACK_GROWS_DOWNWARD)
+	cpp_define (pfile, "__LIBGCC_STACK_GROWS_DOWNWARD__");
 
       /* For libgcc unwinder code.  */
 #ifdef DONT_USE_BUILTIN_SETJMP
@@ -1207,6 +1211,8 @@ c_cpp_builtins (cpp_reader *pfile)
   /* Make the choice of the stack protector runtime visible to source code.
      The macro names and values here were chosen for compatibility with an
      earlier implementation, i.e. ProPolice.  */
+  if (flag_stack_protect == 4)
+    cpp_define (pfile, "__SSP_EXPLICIT__=4");
   if (flag_stack_protect == 3)
     cpp_define (pfile, "__SSP_STRONG__=3");
   if (flag_stack_protect == 2)
@@ -1214,8 +1220,11 @@ c_cpp_builtins (cpp_reader *pfile)
   else if (flag_stack_protect == 1)
     cpp_define (pfile, "__SSP__=1");
 
+  if (flag_openacc)
+    cpp_define (pfile, "_OPENACC=201306");
+
   if (flag_openmp)
-    cpp_define (pfile, "_OPENMP=201307");
+    cpp_define (pfile, "_OPENMP=201511");
 
   for (i = 0; i < NUM_INT_N_ENTS; i ++)
     if (int_n_enabled_p[i])
@@ -1368,7 +1377,7 @@ builtin_define_with_value (const char *macro, const char *expansion, int is_str)
 
 
 /* Pass an object-like macro and an integer value to define it to.  */
-static void
+void
 builtin_define_with_int_value (const char *macro, HOST_WIDE_INT value)
 {
   char *buf;

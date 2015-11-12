@@ -1,5 +1,5 @@
 ;; Predicate definitions for Synopsys DesignWare ARC.
-;; Copyright (C) 2007-2014 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2015 Free Software Foundation, Inc.
 ;;
 ;; This file is part of GCC.
 ;;
@@ -664,7 +664,7 @@
        (match_operand 0 "shiftr4_operator")))
 
 (define_predicate "mult_operator"
-    (and (match_code "mult") (match_test "TARGET_ARC700 && !TARGET_NOMPY_SET"))
+    (and (match_code "mult") (match_test "TARGET_MPY"))
 )
 
 (define_predicate "commutative_operator"
@@ -809,3 +809,7 @@
     (match_test "INTVAL (op) >= 0")
     (and (match_test "const_double_operand (op, mode)")
 	 (match_test "CONST_DOUBLE_HIGH (op) == 0"))))
+
+(define_predicate "short_const_int_operand"
+  (and (match_operand 0 "const_int_operand")
+       (match_test "satisfies_constraint_C16 (op)")))

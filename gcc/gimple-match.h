@@ -1,6 +1,6 @@
 /* Gimple simplify definitions.
 
-   Copyright (C) 2011-2014 Free Software Foundation, Inc.
+   Copyright (C) 2011-2015 Free Software Foundation, Inc.
    Contributed by Richard Guenther <rguenther@suse.de>
 
 This file is part of GCC.
@@ -40,8 +40,28 @@ private:
   int rep;
 };
 
-bool gimple_simplify (gimple, code_helper *, tree *, gimple_seq *,
-		      tree (*)(tree));
+/* Return whether OPS[0] with CODE is a non-expression result and
+   a gimple value.  */
+
+inline bool
+gimple_simplified_result_is_gimple_val (code_helper code, tree *ops)
+{
+  return (code.is_tree_code ()
+	  && (TREE_CODE_LENGTH ((tree_code) code) == 0
+	      || ((tree_code) code) == ADDR_EXPR)
+	  && is_gimple_val (ops[0]));
+}
+
+extern tree (*mprts_hook) (code_helper, tree, tree *);
+
+bool gimple_simplify (gimple *, code_helper *, tree *, gimple_seq *,
+		      tree (*)(tree), tree (*)(tree));
+bool gimple_resimplify1 (gimple_seq *, code_helper *, tree, tree *,
+			 tree (*)(tree));
+bool gimple_resimplify2 (gimple_seq *, code_helper *, tree, tree *,
+			 tree (*)(tree));
+bool gimple_resimplify3 (gimple_seq *, code_helper *, tree, tree *,
+			 tree (*)(tree));
 tree maybe_push_res_to_seq (code_helper, tree, tree *,
 			    gimple_seq *, tree res = NULL_TREE);
 void maybe_build_generic_op (enum tree_code, tree, tree *, tree, tree);

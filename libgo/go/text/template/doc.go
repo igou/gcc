@@ -18,7 +18,7 @@ structure as execution proceeds.
 The input text for a template is UTF-8-encoded text in any format.
 "Actions"--data evaluations or control structures--are delimited by
 "{{" and "}}"; all text outside actions is copied to the output unchanged.
-Actions may not span newlines, although comments can.
+Except for raw strings, actions may not span newlines, although comments can.
 
 Once parsed, a template may be executed safely in parallel.
 
@@ -106,7 +106,7 @@ An argument is a simple value, denoted by one of the following.
 
 	- A boolean, string, character, integer, floating-point, imaginary
 	  or complex constant in Go syntax. These behave like Go's untyped
-	  constants, although raw strings may not span newlines.
+	  constants.
 	- The keyword nil, representing an untyped Go nil.
 	- The character '.' (period):
 		.
@@ -338,10 +338,11 @@ arguments will be evaluated.)
 The comparison functions work on basic types only (or named basic
 types, such as "type Celsius float32"). They implement the Go rules
 for comparison of values, except that size and exact type are
-ignored, so any integer value may be compared with any other integer
-value, any unsigned integer value may be compared with any other
-unsigned integer value, and so on. However, as usual, one may not
-compare an int with a float32 and so on.
+ignored, so any integer value, signed or unsigned, may be compared
+with any other integer value. (The arithmetic value is compared,
+not the bit pattern, so all negative integers are less than all
+unsigned integers.) However, as usual, one may not compare an int
+with a float32 and so on.
 
 Associated templates
 

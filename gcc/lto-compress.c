@@ -1,6 +1,6 @@
 /* LTO IL compression streams.
 
-   Copyright (C) 2009-2014 Free Software Foundation, Inc.
+   Copyright (C) 2009-2015 Free Software Foundation, Inc.
    Contributed by Simon Baldwin <simonb@google.com>
 
 This file is part of GCC.
@@ -21,35 +21,17 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #include "system.h"
+#include "coretypes.h"
+#include "backend.h"
+#include "tree.h"
+#include "gimple.h"
+#include "cgraph.h"
+#include "lto-streamer.h"
 /* zlib.h includes other system headers.  Those headers may test feature
    test macros.  config.h may define feature test macros.  For this reason,
    zlib.h needs to be included after, rather than before, config.h and
    system.h.  */
 #include <zlib.h>
-#include "coretypes.h"
-#include "tree.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "tm.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "basic-block.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "gimple-expr.h"
-#include "is-a.h"
-#include "gimple.h"
-#include "diagnostic-core.h"
-#include "langhooks.h"
-#include "hash-map.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
-#include "lto-streamer.h"
 #include "lto-compress.h"
 
 /* Compression stream structure, holds the flush callback and opaque token,

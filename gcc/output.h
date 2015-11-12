@@ -1,6 +1,6 @@
 /* Declarations for insn-output.c and other code to write to asm_out_file.
    These functions are defined in final.c, and varasm.c.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -108,9 +108,9 @@ extern void output_asm_label (rtx);
 /* Marks SYMBOL_REFs in x as referenced through use of assemble_external.  */
 extern void mark_symbol_refs_as_used (rtx);
 
-/* Print a memory reference operand for address X
+/* Print a memory reference operand for address X with access mode MODE
    using machine-dependent assembler syntax.  */
-extern void output_address (rtx);
+extern void output_address (machine_mode, rtx);
 
 /* Print an integer constant expression in assembler syntax.
    Addition and subtraction are the only arithmetic
@@ -278,10 +278,11 @@ extern section *get_named_text_section (tree, const char *, const char *);
 #define assemble_aligned_integer(SIZE, VALUE) \
   assemble_integer (VALUE, SIZE, (SIZE) * BITS_PER_UNIT, 1)
 
-#ifdef REAL_VALUE_TYPE_SIZE
-/* Assemble the floating-point constant D into an object of size MODE.  */
-extern void assemble_real (REAL_VALUE_TYPE, machine_mode, unsigned);
-#endif
+/* Assemble the floating-point constant D into an object of size MODE.  ALIGN
+   is the alignment of the constant in bits.  If REVERSE is true, D is output
+   in reverse storage order.  */
+extern void assemble_real (REAL_VALUE_TYPE, machine_mode, unsigned,
+			   bool = false);
 
 /* Write the address of the entity given by SYMBOL to SEC.  */
 extern void assemble_addr_to_section (rtx, section *);
@@ -289,9 +290,7 @@ extern void assemble_addr_to_section (rtx, section *);
 /* Return the size of the constant pool.  */
 extern int get_pool_size (void);
 
-#ifdef HAVE_peephole
 extern rtx_insn *peephole (rtx_insn *);
-#endif
 
 extern void output_shared_constant_pool (void);
 
@@ -586,6 +585,8 @@ extern void default_asm_output_anchor (rtx);
 extern bool default_use_anchors_for_symbol_p (const_rtx);
 extern bool default_binds_local_p (const_tree);
 extern bool default_binds_local_p_1 (const_tree, int);
+extern bool default_binds_local_p_2 (const_tree);
+extern bool default_binds_local_p_3 (const_tree, bool, bool, bool, bool);
 extern void default_globalize_label (FILE *, const char *);
 extern void default_globalize_decl_name (FILE *, tree);
 extern void default_emit_unwind_label (FILE *, tree, int, int);

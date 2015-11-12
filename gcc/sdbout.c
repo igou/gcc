@@ -1,5 +1,5 @@
 /* Output sdb-format symbol table information from GNU compiler.
-   Copyright (C) 1988-2014 Free Software Foundation, Inc.
+   Copyright (C) 1988-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -47,8 +47,6 @@ AT&T C compiler.  From the example below I would conclude the following:
 #include "tree.h"
 #include "varasm.h"
 #include "stor-layout.h"
-#include "ggc.h"
-#include "vec.h"
 
 static GTY(()) tree anonymous_types;
 
@@ -119,7 +117,8 @@ static void sdbout_begin_block		(unsigned int, unsigned int);
 static void sdbout_end_block		(unsigned int, unsigned int);
 static void sdbout_source_line		(unsigned int, const char *, int, bool);
 static void sdbout_end_epilogue		(unsigned int, const char *);
-static void sdbout_global_decl		(tree);
+static void sdbout_early_global_decl	(tree);
+static void sdbout_late_global_decl	(tree);
 static void sdbout_begin_prologue	(unsigned int, const char *);
 static void sdbout_end_prologue		(unsigned int, const char *);
 static void sdbout_begin_function	(tree);
@@ -142,7 +141,6 @@ static void sdbout_field_types		(tree);
 static void sdbout_one_type		(tree);
 static void sdbout_parms		(tree);
 static void sdbout_reg_parms		(tree);
-static void sdbout_global_decl		(tree);
 
 /* Random macros describing parts of SDB data.  */
 
@@ -279,6 +277,7 @@ const struct gcc_debug_hooks sdb_debug_hooks =
 {
   sdbout_init,			         /* init */
   sdbout_finish,		         /* finish */
+  debug_nothing_void,			 /* early_finish */
   debug_nothing_void,			 /* assembly_start */
   debug_nothing_int_charstar,	         /* define */
   debug_nothing_int_charstar,	         /* undef */
@@ -294,8 +293,10 @@ const struct gcc_debug_hooks sdb_debug_hooks =
   sdbout_end_epilogue,		         /* end_epilogue */
   sdbout_begin_function,	         /* begin_function */
   sdbout_end_function,		         /* end_function */
+  debug_nothing_tree,		         /* register_main_translation_unit */
   debug_nothing_tree,		         /* function_decl */
-  sdbout_global_decl,		         /* global_decl */
+  sdbout_early_global_decl,		 /* early_global_decl */
+  sdbout_late_global_decl,		 /* late_global_decl */
   sdbout_symbol,			 /* type_decl */
   debug_nothing_tree_tree_tree_bool,	 /* imported_module_or_decl */
   debug_nothing_tree,		         /* deferred_inline_function */
@@ -1421,11 +1422,20 @@ sdbout_reg_parms (tree parms)
       }
 }
 
-/* Output debug information for a global DECL.  Called from toplev.c
-   after compilation proper has finished.  */
+/* Output early debug information for a global DECL.  Called from
+   rest_of_decl_compilation during parsing.  */
 
 static void
-sdbout_global_decl (tree decl)
+sdbout_early_global_decl (tree decl ATTRIBUTE_UNUSED)
+{
+  /* NYI for non-dwarf.  */
+}
+
+/* Output late debug information for a global DECL after location
+   information is available.  */
+
+static void
+sdbout_late_global_decl (tree decl)
 {
   if (TREE_CODE (decl) == VAR_DECL
       && !DECL_EXTERNAL (decl)

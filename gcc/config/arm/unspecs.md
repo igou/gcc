@@ -1,5 +1,5 @@
 ;; Unspec defintions.
-;; Copyright (C) 2012-2014 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2015 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 
 ;; This file is part of GCC.
@@ -83,6 +83,8 @@
                         ; FPSCR rounding mode and signal inexactness.
   UNSPEC_VRINTA         ; Represent a float to integral float rounding
                         ; towards nearest, ties away from zero.
+  UNSPEC_PROBE_STACK    ; Probe stack memory reference
+  UNSPEC_PROBE_STACK_RANGE ; Probe stack range
 ])
 
 (define_c_enum "unspec" [

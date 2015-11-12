@@ -1,5 +1,5 @@
 /* Parse C expressions for cpplib.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
    Contributed by Per Bothner, 1994.
 
 This program is free software; you can redistribute it and/or modify it
@@ -65,7 +65,6 @@ static unsigned int interpret_int_suffix (cpp_reader *, const uchar *, size_t);
 static void check_promotion (cpp_reader *, const struct op *);
 
 static cpp_num parse_has_include (cpp_reader *, enum include_type);
-static cpp_num parse_has_attribute (cpp_reader *);
 
 /* Token type abuse to create unary plus and minus operators.  */
 #define CPP_UPLUS ((enum cpp_ttype) (CPP_LAST_CPP_OP + 1))
@@ -308,6 +307,8 @@ cpp_userdef_char_remove_type (enum cpp_ttype type)
     return CPP_CHAR16;
   else if (type == CPP_CHAR32_USERDEF)
     return CPP_CHAR32;
+  else if (type == CPP_UTF8CHAR_USERDEF)
+    return CPP_UTF8CHAR;
   else
     return type;
 }
@@ -326,6 +327,8 @@ cpp_userdef_char_add_type (enum cpp_ttype type)
     return CPP_CHAR16_USERDEF;
   else if (type == CPP_CHAR32)
     return CPP_CHAR32_USERDEF;
+  else if (type == CPP_UTF8CHAR)
+    return CPP_UTF8CHAR_USERDEF;
   else
     return type;
 }
@@ -351,7 +354,8 @@ cpp_userdef_char_p (enum cpp_ttype type)
   if (type == CPP_CHAR_USERDEF
    || type == CPP_WCHAR_USERDEF
    || type == CPP_CHAR16_USERDEF
-   || type == CPP_CHAR32_USERDEF)
+   || type == CPP_CHAR32_USERDEF
+   || type == CPP_UTF8CHAR_USERDEF)
     return true;
   else
     return false;
@@ -697,9 +701,9 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
       && CPP_PEDANTIC (pfile))
     cpp_error_with_line (pfile, CPP_DL_PEDWARN, virtual_location, 0,
 			 CPP_OPTION (pfile, cplusplus)
-			 ? "binary constants are a C++14 feature "
-			   "or GCC extension"
-			 : "binary constants are a GCC extension");
+			 ? N_("binary constants are a C++14 feature "
+			      "or GCC extension")
+			 : N_("binary constants are a GCC extension"));
 
   if (radix == 10)
     result |= CPP_N_DECIMAL;
@@ -1030,6 +1034,7 @@ eval_token (cpp_reader *pfile, const cpp_token *token,
     case CPP_CHAR:
     case CPP_CHAR16:
     case CPP_CHAR32:
+    case CPP_UTF8CHAR:
       {
 	cppchar_t cc = cpp_interpret_charconst (pfile, token,
 						&temp, &unsignedp);
@@ -1055,8 +1060,6 @@ eval_token (cpp_reader *pfile, const cpp_token *token,
 	return parse_has_include (pfile, IT_INCLUDE);
       else if (token->val.node.node == pfile->spec_nodes.n__has_include_next__)
 	return parse_has_include (pfile, IT_INCLUDE_NEXT);
-      else if (token->val.node.node == pfile->spec_nodes.n__has_attribute__)
-	return parse_has_attribute (pfile);
       else if (CPP_OPTION (pfile, cplusplus)
 	       && (token->val.node.node == pfile->spec_nodes.n_true
 		   || token->val.node.node == pfile->spec_nodes.n_false))
@@ -1217,6 +1220,7 @@ _cpp_parse_expr (cpp_reader *pfile, bool is_if)
 	case CPP_WCHAR:
 	case CPP_CHAR16:
 	case CPP_CHAR32:
+	case CPP_UTF8CHAR:
 	case CPP_NAME:
 	case CPP_HASH:
 	  if (!want_value)
@@ -2147,24 +2151,6 @@ parse_has_include (cpp_reader *pfile, enum include_type type)
     pfile->mi_ind_cmacro = node;
 
   pfile->state.in__has_include__--;
-
-  return result;
-}
-
-/* Handle meeting "__has_attribute__" in a preprocessor expression.  */
-static cpp_num
-parse_has_attribute (cpp_reader *pfile)
-{
-  pfile->state.in__has_attribute__++;
-
-  cpp_num result;
-  result.unsignedp = false;
-  result.high = 0;
-  result.overflow = false;
-
-  result.low = pfile->cb.has_attribute (pfile);
-
-  pfile->state.in__has_attribute__--;
 
   return result;
 }

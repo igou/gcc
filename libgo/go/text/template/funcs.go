@@ -92,6 +92,8 @@ func goodFunc(typ reflect.Type) bool {
 // findFunction looks for a function in the template, and global map.
 func findFunction(name string, tmpl *Template) (reflect.Value, bool) {
 	if tmpl != nil && tmpl.common != nil {
+		tmpl.muFuncs.RLock()
+		defer tmpl.muFuncs.RUnlock()
 		if fn := tmpl.execFuncs[name]; fn.IsValid() {
 			return fn, true
 		}
@@ -314,25 +316,34 @@ func eq(arg1 interface{}, arg2 ...interface{}) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if k1 != k2 {
-			return false, errBadComparison
-		}
 		truth := false
-		switch k1 {
-		case boolKind:
-			truth = v1.Bool() == v2.Bool()
-		case complexKind:
-			truth = v1.Complex() == v2.Complex()
-		case floatKind:
-			truth = v1.Float() == v2.Float()
-		case intKind:
-			truth = v1.Int() == v2.Int()
-		case stringKind:
-			truth = v1.String() == v2.String()
-		case uintKind:
-			truth = v1.Uint() == v2.Uint()
-		default:
-			panic("invalid kind")
+		if k1 != k2 {
+			// Special case: Can compare integer values regardless of type's sign.
+			switch {
+			case k1 == intKind && k2 == uintKind:
+				truth = v1.Int() >= 0 && uint64(v1.Int()) == v2.Uint()
+			case k1 == uintKind && k2 == intKind:
+				truth = v2.Int() >= 0 && v1.Uint() == uint64(v2.Int())
+			default:
+				return false, errBadComparison
+			}
+		} else {
+			switch k1 {
+			case boolKind:
+				truth = v1.Bool() == v2.Bool()
+			case complexKind:
+				truth = v1.Complex() == v2.Complex()
+			case floatKind:
+				truth = v1.Float() == v2.Float()
+			case intKind:
+				truth = v1.Int() == v2.Int()
+			case stringKind:
+				truth = v1.String() == v2.String()
+			case uintKind:
+				truth = v1.Uint() == v2.Uint()
+			default:
+				panic("invalid kind")
+			}
 		}
 		if truth {
 			return true, nil
@@ -360,23 +371,32 @@ func lt(arg1, arg2 interface{}) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if k1 != k2 {
-		return false, errBadComparison
-	}
 	truth := false
-	switch k1 {
-	case boolKind, complexKind:
-		return false, errBadComparisonType
-	case floatKind:
-		truth = v1.Float() < v2.Float()
-	case intKind:
-		truth = v1.Int() < v2.Int()
-	case stringKind:
-		truth = v1.String() < v2.String()
-	case uintKind:
-		truth = v1.Uint() < v2.Uint()
-	default:
-		panic("invalid kind")
+	if k1 != k2 {
+		// Special case: Can compare integer values regardless of type's sign.
+		switch {
+		case k1 == intKind && k2 == uintKind:
+			truth = v1.Int() < 0 || uint64(v1.Int()) < v2.Uint()
+		case k1 == uintKind && k2 == intKind:
+			truth = v2.Int() >= 0 && v1.Uint() < uint64(v2.Int())
+		default:
+			return false, errBadComparison
+		}
+	} else {
+		switch k1 {
+		case boolKind, complexKind:
+			return false, errBadComparisonType
+		case floatKind:
+			truth = v1.Float() < v2.Float()
+		case intKind:
+			truth = v1.Int() < v2.Int()
+		case stringKind:
+			truth = v1.String() < v2.String()
+		case uintKind:
+			truth = v1.Uint() < v2.Uint()
+		default:
+			panic("invalid kind")
+		}
 	}
 	return truth, nil
 }
@@ -572,7 +592,7 @@ func evalArgs(args []interface{}) string {
 			a, ok := printableValue(reflect.ValueOf(arg))
 			if ok {
 				args[i] = a
-			} // else left fmt do its thing
+			} // else let fmt do its thing
 		}
 		s = fmt.Sprint(args...)
 	}

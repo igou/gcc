@@ -1,6 +1,6 @@
 /* Routines for reading GIMPLE from a file stream.
 
-   Copyright (C) 2011-2014 Free Software Foundation, Inc.
+   Copyright (C) 2011-2015 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -22,38 +22,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "diagnostic.h"
+#include "backend.h"
 #include "tree.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "tm.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "basic-block.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "tree-eh.h"
-#include "gimple-expr.h"
-#include "is-a.h"
 #include "gimple.h"
-#include "gimple-iterator.h"
-#include "gimple-ssa.h"
-#include "tree-phinodes.h"
-#include "stringpool.h"
-#include "tree-ssanames.h"
-#include "hash-map.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
-#include "data-streamer.h"
-#include "tree-streamer.h"
+#include "ssa.h"
 #include "gimple-streamer.h"
+#include "tree-eh.h"
+#include "gimple-iterator.h"
+#include "cgraph.h"
 #include "value-prof.h"
 
 /* Read a PHI function for basic block BB in function FN.  DATA_IN is
@@ -81,7 +57,9 @@ input_phi (struct lto_input_block *ib, basic_block bb, struct data_in *data_in,
       tree def = stream_read_tree (ib, data_in);
       int src_index = streamer_read_uhwi (ib);
       bitpack_d bp = streamer_read_bitpack (ib);
-      location_t arg_loc = stream_input_location (&bp, data_in);
+      /* Do not cache a location - we do not have API to get pointer to the
+	 location in PHI statement and we may trigger reallocation.  */
+      location_t arg_loc = stream_input_location_now (&bp, data_in);
       basic_block sbb = BASIC_BLOCK_FOR_FN (fn, src_index);
 
       edge e = NULL;
@@ -104,11 +82,11 @@ input_phi (struct lto_input_block *ib, basic_block bb, struct data_in *data_in,
 /* Read a statement with tag TAG in function FN from block IB using
    descriptors in DATA_IN.  */
 
-static gimple
+static gimple *
 input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
 		   enum LTO_tags tag)
 {
-  gimple stmt;
+  gimple *stmt;
   enum gimple_code code;
   unsigned HOST_WIDE_INT num_ops;
   size_t i;
@@ -128,8 +106,9 @@ input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
   has_hist = bp_unpack_value (&bp, 1);
   stmt->subcode = bp_unpack_var_len_unsigned (&bp);
 
-  /* Read location information.  */
-  gimple_set_location (stmt, stream_input_location (&bp, data_in));
+  /* Read location information.  Caching here makes no sense until streamer
+     cache can handle the following gimple_set_block.  */
+  gimple_set_location (stmt, stream_input_location_now (&bp, data_in));
 
   /* Read lexical block reference.  */
   gimple_set_block (stmt, stream_read_tree (ib, data_in));
@@ -294,7 +273,7 @@ input_bb (struct lto_input_block *ib, enum LTO_tags tag,
   tag = streamer_read_record_start (ib);
   while (tag)
     {
-      gimple stmt = input_gimple_stmt (ib, data_in, tag);
+      gimple *stmt = input_gimple_stmt (ib, data_in, tag);
       gsi_insert_after (&bsi, stmt, GSI_NEW_STMT);
 
       /* After the statement, expect a 0 delimiter or the EH region

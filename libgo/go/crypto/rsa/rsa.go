@@ -6,6 +6,7 @@
 package rsa
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
@@ -21,6 +22,16 @@ var bigOne = big.NewInt(1)
 type PublicKey struct {
 	N *big.Int // modulus
 	E int      // public exponent
+}
+
+// OAEPOptions is an interface for passing options to OAEP decryption using the
+// crypto.Decrypter interface.
+type OAEPOptions struct {
+	// Hash is the hash function that will be used when generating the mask.
+	Hash crypto.Hash
+	// Label is an arbitrary byte string that must be equal to the value
+	// used when encrypting.
+	Label []byte
 }
 
 var (
@@ -58,6 +69,55 @@ type PrivateKey struct {
 	Precomputed PrecomputedValues
 }
 
+// Public returns the public key corresponding to priv.
+func (priv *PrivateKey) Public() crypto.PublicKey {
+	return &priv.PublicKey
+}
+
+// Sign signs msg with priv, reading randomness from rand. If opts is a
+// *PSSOptions then the PSS algorithm will be used, otherwise PKCS#1 v1.5 will
+// be used. This method is intended to support keys where the private part is
+// kept in, for example, a hardware module. Common uses should use the Sign*
+// functions in this package.
+func (priv *PrivateKey) Sign(rand io.Reader, msg []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if pssOpts, ok := opts.(*PSSOptions); ok {
+		return SignPSS(rand, priv, pssOpts.Hash, msg, pssOpts)
+	}
+
+	return SignPKCS1v15(rand, priv, opts.HashFunc(), msg)
+}
+
+// Decrypt decrypts ciphertext with priv. If opts is nil or of type
+// *PKCS1v15DecryptOptions then PKCS#1 v1.5 decryption is performed. Otherwise
+// opts must have type *OAEPOptions and OAEP decryption is done.
+func (priv *PrivateKey) Decrypt(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error) {
+	if opts == nil {
+		return DecryptPKCS1v15(rand, priv, ciphertext)
+	}
+
+	switch opts := opts.(type) {
+	case *OAEPOptions:
+		return DecryptOAEP(opts.Hash.New(), rand, priv, ciphertext, opts.Label)
+
+	case *PKCS1v15DecryptOptions:
+		if l := opts.SessionKeyLen; l > 0 {
+			plaintext = make([]byte, l)
+			if _, err := io.ReadFull(rand, plaintext); err != nil {
+				return nil, err
+			}
+			if err := DecryptPKCS1v15SessionKey(rand, priv, ciphertext, plaintext); err != nil {
+				return nil, err
+			}
+			return plaintext, nil
+		} else {
+			return DecryptPKCS1v15(rand, priv, ciphertext)
+		}
+
+	default:
+		return nil, errors.New("crypto/rsa: invalid options for Decrypt")
+	}
+}
+
 type PrecomputedValues struct {
 	Dp, Dq *big.Int // D mod (P-1) (or mod Q-1)
 	Qinv   *big.Int // Q^-1 mod P
@@ -69,7 +129,7 @@ type PrecomputedValues struct {
 	CRTValues []CRTValue
 }
 
-// CRTValue contains the precomputed chinese remainder theorem values.
+// CRTValue contains the precomputed Chinese remainder theorem values.
 type CRTValue struct {
 	Exp   *big.Int // D mod (prime-1).
 	Coeff *big.Int // R·Coeff ≡ 1 mod Prime.
@@ -83,19 +143,13 @@ func (priv *PrivateKey) Validate() error {
 		return err
 	}
 
-	// Check that the prime factors are actually prime. Note that this is
-	// just a sanity check. Since the random witnesses chosen by
-	// ProbablyPrime are deterministic, given the candidate number, it's
-	// easy for an attack to generate composites that pass this test.
-	for _, prime := range priv.Primes {
-		if !prime.ProbablyPrime(20) {
-			return errors.New("crypto/rsa: prime factor is composite")
-		}
-	}
-
 	// Check that Πprimes == n.
 	modulus := new(big.Int).Set(bigOne)
 	for _, prime := range priv.Primes {
+		// Any primes ≤ 1 will cause divide-by-zero panics later.
+		if prime.Cmp(bigOne) <= 0 {
+			return errors.New("crypto/rsa: invalid prime value")
+		}
 		modulus.Mul(modulus, prime)
 	}
 	if modulus.Cmp(priv.N) != 0 {

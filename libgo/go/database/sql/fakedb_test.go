@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,7 +89,10 @@ type fakeConn struct {
 	stmtsMade   int
 	stmtsClosed int
 	numPrepare  int
-	bad         bool
+
+	// bad connection tests; see isBad()
+	bad       bool
+	stickyBad bool
 }
 
 func (c *fakeConn) incrStat(v *int) {
@@ -124,6 +128,29 @@ var fdriver driver.Driver = &fakeDriver{}
 
 func init() {
 	Register("test", fdriver)
+}
+
+func contains(list []string, y string) bool {
+	for _, x := range list {
+		if x == y {
+			return true
+		}
+	}
+	return false
+}
+
+type Dummy struct {
+	driver.Driver
+}
+
+func TestDrivers(t *testing.T) {
+	unregisterAllDrivers()
+	Register("test", fdriver)
+	Register("invalid", Dummy{})
+	all := Drivers()
+	if len(all) < 2 || !sort.StringsAreSorted(all) || !contains(all, "test") || !contains(all, "invalid") {
+		t.Fatalf("Drivers = %v, want sorted list with at least [invalid, test]", all)
+	}
 }
 
 // Supports dsn forms:
@@ -219,13 +246,15 @@ func (db *fakeDB) columnType(table, column string) (typ string, ok bool) {
 }
 
 func (c *fakeConn) isBad() bool {
-	// if not simulating bad conn, do nothing
-	if !c.bad {
+	if c.stickyBad {
+		return true
+	} else if c.bad {
+		// alternate between bad conn and not bad conn
+		c.db.badConn = !c.db.badConn
+		return c.db.badConn
+	} else {
 		return false
 	}
-	// alternate between bad conn and not bad conn
-	c.db.badConn = !c.db.badConn
-	return c.db.badConn
 }
 
 func (c *fakeConn) Begin() (driver.Tx, error) {
@@ -442,7 +471,7 @@ func (c *fakeConn) Prepare(query string) (driver.Stmt, error) {
 		panic("nil c.db; conn = " + fmt.Sprintf("%#v", c))
 	}
 
-	if hookPrepareBadConn != nil && hookPrepareBadConn() {
+	if c.stickyBad || (hookPrepareBadConn != nil && hookPrepareBadConn()) {
 		return nil, driver.ErrBadConn
 	}
 
@@ -505,7 +534,7 @@ func (s *fakeStmt) Exec(args []driver.Value) (driver.Result, error) {
 		return nil, errClosed
 	}
 
-	if hookExecBadConn != nil && hookExecBadConn() {
+	if s.c.stickyBad || (hookExecBadConn != nil && hookExecBadConn()) {
 		return nil, driver.ErrBadConn
 	}
 
@@ -589,7 +618,7 @@ func (s *fakeStmt) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, errClosed
 	}
 
-	if hookQueryBadConn != nil && hookQueryBadConn() {
+	if s.c.stickyBad || (hookQueryBadConn != nil && hookQueryBadConn()) {
 		return nil, driver.ErrBadConn
 	}
 

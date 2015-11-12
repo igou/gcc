@@ -1,5 +1,5 @@
 /* Loop manipulation code for GNU compiler.
-   Copyright (C) 2002-2014 Free Software Foundation, Inc.
+   Copyright (C) 2002-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,27 +20,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
 #include "rtl.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "cfganal.h"
-#include "basic-block.h"
-#include "cfgloop.h"
 #include "tree.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "gimple-expr.h"
-#include "is-a.h"
 #include "gimple.h"
+#include "cfghooks.h"
+#include "cfganal.h"
+#include "cfgloop.h"
 #include "gimple-iterator.h"
 #include "gimplify-me.h"
 #include "tree-ssa-loop-manip.h"
@@ -176,7 +162,7 @@ fix_loop_placement (struct loop *loop, bool *irred_invalidated)
 }
 
 /* Fix placements of basic blocks inside loop hierarchy stored in loops; i.e.
-   enforce condition condition stated in description of fix_bb_placement. We
+   enforce condition stated in description of fix_bb_placement. We
    start from basic block FROM that had some of its successors removed, so that
    his placement no longer has to be correct, and iteratively fix placement of
    its predecessors that may change if placement of FROM changed.  Also fix

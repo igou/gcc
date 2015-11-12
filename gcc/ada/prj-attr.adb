@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2001-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 2001-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -326,12 +326,6 @@ package body Prj.Attr is
    "Ladefault_switches#" &
    "LbOswitches#" &
 
-   --  package Synchronize
-
-   "Psynchronize#" &
-   "Ladefault_switches#" &
-   "LbOswitches#" &
-
    --  package Eliminate
 
    "Peliminate#" &
@@ -369,6 +363,8 @@ package body Prj.Attr is
    "SVproject_subdir#" &
    "SVactive#" &
    "LAartifacts#" &
+   "SVmode#" &
+   "SVinstall_name#" &
 
    --  package Remote
 
@@ -382,6 +378,24 @@ package body Prj.Attr is
 
    "Pstack#" &
    "LVswitches#" &
+
+   --  package Codepeer
+
+   "Pcodepeer#" &
+   "SVoutput_directory#" &
+   "SVdatabase_directory#" &
+   "SVmessage_patterns#" &
+   "SVadditional_patterns#" &
+   "LVswitches#" &
+   "LVexcluded_source_files#" &
+
+   --  package Prove
+
+   "Pprove#" &
+
+   --  package GnatTest
+
+   "Pgnattest#" &
 
    "#";
 

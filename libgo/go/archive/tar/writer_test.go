@@ -147,6 +147,44 @@ var writerTests = []*writerTest{
 			},
 		},
 	},
+	// This file was produced using gnu tar 1.26
+	// echo "Slartibartfast" > file.txt
+	// ln file.txt hard.txt
+	// tar -b 1 --format=ustar -c -f hardlink.tar file.txt hard.txt
+	{
+		file: "testdata/hardlink.tar",
+		entries: []*writerTestEntry{
+			{
+				header: &Header{
+					Name:     "file.txt",
+					Mode:     0644,
+					Uid:      1000,
+					Gid:      100,
+					Size:     15,
+					ModTime:  time.Unix(1425484303, 0),
+					Typeflag: '0',
+					Uname:    "vbatts",
+					Gname:    "users",
+				},
+				contents: "Slartibartfast\n",
+			},
+			{
+				header: &Header{
+					Name:     "hard.txt",
+					Mode:     0644,
+					Uid:      1000,
+					Gid:      100,
+					Size:     0,
+					ModTime:  time.Unix(1425484303, 0),
+					Typeflag: '1',
+					Linkname: "file.txt",
+					Uname:    "vbatts",
+					Gname:    "users",
+				},
+				// no contents
+			},
+		},
+	},
 }
 
 // Render byte array in a two-character hexadecimal string, spaced for easy visual inspection.
@@ -452,5 +490,57 @@ func TestUSTARLongName(t *testing.T) {
 	}
 	if hdr.Name != longName {
 		t.Fatal("Couldn't recover long name")
+	}
+}
+
+func TestValidTypeflagWithPAXHeader(t *testing.T) {
+	var buffer bytes.Buffer
+	tw := NewWriter(&buffer)
+
+	fileName := strings.Repeat("ab", 100)
+
+	hdr := &Header{
+		Name:     fileName,
+		Size:     4,
+		Typeflag: 0,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("Failed to write header: %s", err)
+	}
+	if _, err := tw.Write([]byte("fooo")); err != nil {
+		t.Fatalf("Failed to write the file's data: %s", err)
+	}
+	tw.Close()
+
+	tr := NewReader(&buffer)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Failed to read header: %s", err)
+		}
+		if header.Typeflag != 0 {
+			t.Fatalf("Typeflag should've been 0, found %d", header.Typeflag)
+		}
+	}
+}
+
+func TestWriteAfterClose(t *testing.T) {
+	var buffer bytes.Buffer
+	tw := NewWriter(&buffer)
+
+	hdr := &Header{
+		Name: "small.txt",
+		Size: 5,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("Failed to write header: %s", err)
+	}
+	tw.Close()
+	if _, err := tw.Write([]byte("Kilts")); err != ErrWriteAfterClose {
+		t.Fatalf("Write: got %v; want ErrWriteAfterClose", err)
 	}
 }

@@ -1,5 +1,5 @@
 /* Single entry single exit control flow regions.
-   Copyright (C) 2008-2014 Free Software Foundation, Inc.
+   Copyright (C) 2008-2015 Free Software Foundation, Inc.
    Contributed by Jan Sjodin <jan.sjodin@amd.com> and
    Sebastian Pop <sebastian.pop@amd.com>.
 
@@ -22,58 +22,123 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef GCC_SESE_H
 #define GCC_SESE_H
 
+typedef hash_map<basic_block, vec<basic_block> > bb_map_t;
+typedef hash_map<tree, vec<tree> > rename_map_t;
+typedef struct ifsese_s *ifsese;
+/* First phi is the new codegenerated phi second one is original phi.  */
+typedef std::pair <gphi *, gphi *> phi_rename;
+/* First edge is the init edge and second is the back edge w.r.t. a loop.  */
+typedef std::pair<edge, edge> init_back_edge_pair_t;
+
 /* A Single Entry, Single Exit region is a part of the CFG delimited
    by two edges.  */
-typedef struct sese_s
+struct sese_l
 {
-  /* Single ENTRY and single EXIT from the SESE region.  */
-  edge entry, exit;
+  sese_l (edge e, edge x) : entry (e), exit (x) {}
+
+  operator bool () const { return entry && exit; }
+
+  edge entry;
+  edge exit;
+};
+
+/* Get the entry of an sese S.  */
+
+static inline basic_block
+get_entry_bb (sese_l &s)
+{
+  return s.entry->dest;
+}
+
+/* Get the exit of an sese S.  */
+
+static inline basic_block
+get_exit_bb (sese_l &s)
+{
+  return s.exit->src;
+}
+
+/* Returns the index of V where ELEM can be found. -1 Otherwise.  */
+
+template<typename T>
+int
+vec_find (const vec<T> &v, const T &elem)
+{
+  int i;
+  T t;
+  FOR_EACH_VEC_ELT (v, i, t)
+    if (elem == t)
+      return i;
+  return -1;
+}
+
+/* A helper structure for bookkeeping information about a scop in graphite.  */
+typedef struct sese_info_t
+{
+  /* The SESE region.  */
+  sese_l region;
 
   /* Parameters used within the SCOP.  */
   vec<tree> params;
 
-  /* Loops completely contained in the SCOP.  */
+  /* Maps an old name to one or more new names.  When there are several new
+     names, one has to select the definition corresponding to the immediate
+     dominator.  */
+  rename_map_t *rename_map;
+
+  /* Loops completely contained in this SESE.  */
   bitmap loops;
   vec<loop_p> loop_nest;
 
-  /* Are we allowed to add more params?  This is for debugging purpose.  We
-     can only add new params before generating the bb domains, otherwise they
-     become invalid.  */
-  bool add_params;
-} *sese;
+  /* Basic blocks contained in this SESE.  */
+  vec<basic_block> bbs;
 
-#define SESE_ENTRY(S) (S->entry)
-#define SESE_ENTRY_BB(S) (S->entry->dest)
-#define SESE_EXIT(S) (S->exit)
-#define SESE_EXIT_BB(S) (S->exit->dest)
-#define SESE_PARAMS(S) (S->params)
-#define SESE_LOOPS(S) (S->loops)
-#define SESE_LOOP_NEST(S) (S->loop_nest)
-#define SESE_ADD_PARAMS(S) (S->add_params)
+  /* Copied basic blocks indexed by the original bb.  */
+  bb_map_t *copied_bb_map;
 
-extern sese new_sese (edge, edge);
-extern void free_sese (sese);
-extern void sese_insert_phis_for_liveouts (sese, basic_block, edge, edge);
-extern void build_sese_loop_nests (sese);
-extern edge copy_bb_and_scalar_dependences (basic_block, sese, edge,
+  /* A vector of phi nodes to be updated when all arguments are available.  The
+     pair contains first the old_phi and second the new_phi.  */
+  vec<phi_rename> incomplete_phis;
+
+  /* The condition region generated for this sese.  */
+  ifsese if_region;
+
+} *sese_info_p;
+
+extern sese_info_p new_sese_info (edge, edge);
+extern void free_sese_info (sese_info_p);
+extern void sese_insert_phis_for_liveouts (sese_info_p, basic_block, edge, edge);
+extern void build_sese_loop_nests (sese_info_p);
+extern edge copy_bb_and_scalar_dependences (basic_block, sese_info_p, edge,
 					    vec<tree> , bool *);
-extern struct loop *outermost_loop_in_sese (sese, basic_block);
-extern tree scalar_evolution_in_region (sese, loop_p, tree);
+extern struct loop *outermost_loop_in_sese (sese_l &, basic_block);
+extern tree scalar_evolution_in_region (sese_l &, loop_p, tree);
+extern bool invariant_in_sese_p_rec (tree, sese_l &, bool *);
+extern bool bb_contains_loop_phi_nodes (basic_block);
+extern bool bb_contains_loop_close_phi_nodes (basic_block);
+extern std::pair<edge, edge> get_edges (basic_block bb);
+extern void copy_loop_phi_args (gphi *, init_back_edge_pair_t &,
+				gphi *, init_back_edge_pair_t &,
+				sese_info_p, bool);
+extern bool copy_loop_close_phi_args (basic_block, basic_block,
+				      sese_info_p, bool);
+extern bool copy_cond_phi_args (gphi *, gphi *, vec<tree>,
+				sese_info_p, bool);
 
 /* Check that SESE contains LOOP.  */
 
 static inline bool
-sese_contains_loop (sese sese, struct loop *loop)
+sese_contains_loop (sese_info_p sese, struct loop *loop)
 {
-  return bitmap_bit_p (SESE_LOOPS (sese), loop->num);
+  return bitmap_bit_p (sese->loops, loop->num);
 }
 
 /* The number of parameters in REGION. */
 
 static inline unsigned
-sese_nb_params (sese region)
+sese_nb_params (sese_info_p region)
 {
-  return SESE_PARAMS (region).length ();
+  return region->params.length ();
 }
 
 /* Checks whether BB is contained in the region delimited by ENTRY and
@@ -82,16 +147,18 @@ sese_nb_params (sese region)
 static inline bool
 bb_in_region (basic_block bb, basic_block entry, basic_block exit)
 {
-#ifdef ENABLE_CHECKING
-  {
-    edge e;
-    edge_iterator ei;
+  /* FIXME: PR67842.  */
+#if 0
+  if (flag_checking)
+    {
+      edge e;
+      edge_iterator ei;
 
-    /* Check that there are no edges coming in the region: all the
-       predecessors of EXIT are dominated by ENTRY.  */
-    FOR_EACH_EDGE (e, ei, exit->preds)
-      dominated_by_p (CDI_DOMINATORS, e->src, entry);
-  }
+      /* Check that there are no edges coming in the region: all the
+	 predecessors of EXIT are dominated by ENTRY.  */
+      FOR_EACH_EDGE (e, ei, exit->preds)
+	gcc_assert (dominated_by_p (CDI_DOMINATORS, e->src, entry));
+    }
 #endif
 
   return dominated_by_p (CDI_DOMINATORS, bb, entry)
@@ -103,36 +170,32 @@ bb_in_region (basic_block bb, basic_block entry, basic_block exit)
    EXIT blocks.  */
 
 static inline bool
-bb_in_sese_p (basic_block bb, sese region)
+bb_in_sese_p (basic_block bb, sese_l &r)
 {
-  basic_block entry = SESE_ENTRY_BB (region);
-  basic_block exit = SESE_EXIT_BB (region);
-
-  return bb_in_region (bb, entry, exit);
+  return bb_in_region (bb, r.entry->dest, r.exit->dest);
 }
 
 /* Returns true when STMT is defined in REGION.  */
 
 static inline bool
-stmt_in_sese_p (gimple stmt, sese region)
+stmt_in_sese_p (gimple *stmt, sese_l &r)
 {
   basic_block bb = gimple_bb (stmt);
-  return bb && bb_in_sese_p (bb, region);
+  return bb && bb_in_sese_p (bb, r);
 }
 
 /* Returns true when NAME is defined in REGION.  */
 
 static inline bool
-defined_in_sese_p (tree name, sese region)
+defined_in_sese_p (tree name, sese_l &r)
 {
-  gimple stmt = SSA_NAME_DEF_STMT (name);
-  return stmt_in_sese_p (stmt, region);
+  return stmt_in_sese_p (SSA_NAME_DEF_STMT (name), r);
 }
 
 /* Returns true when LOOP is in REGION.  */
 
 static inline bool
-loop_in_sese_p (struct loop *loop, sese region)
+loop_in_sese_p (struct loop *loop, sese_l &region)
 {
   return (bb_in_sese_p (loop->header, region)
 	  && bb_in_sese_p (loop->latch, region));
@@ -162,14 +225,9 @@ loop_in_sese_p (struct loop *loop, sese region)
     loop_2 is completely contained -> depth 1  */
 
 static inline unsigned int
-sese_loop_depth (sese region, loop_p loop)
+sese_loop_depth (sese_l &region, loop_p loop)
 {
   unsigned int depth = 0;
-
-  gcc_assert ((!loop_in_sese_p (loop, region)
-	       && (SESE_ENTRY_BB (region)->loop_father == loop
-	           || SESE_EXIT (region)->src->loop_father == loop))
-              || loop_in_sese_p (loop, region));
 
   while (loop_in_sese_p (loop, region))
     {
@@ -180,53 +238,16 @@ sese_loop_depth (sese region, loop_p loop)
   return depth;
 }
 
-/* Splits BB to make a single entry single exit region.  */
-
-static inline sese
-split_region_for_bb (basic_block bb)
-{
-  edge entry, exit;
-
-  if (single_pred_p (bb))
-    entry = single_pred_edge (bb);
-  else
-    {
-      entry = split_block_after_labels (bb);
-      bb = single_succ (bb);
-    }
-
-  if (single_succ_p (bb))
-    exit = single_succ_edge (bb);
-  else
-    {
-      gimple_stmt_iterator gsi = gsi_last_bb (bb);
-      gsi_prev (&gsi);
-      exit = split_block (bb, gsi_stmt (gsi));
-    }
-
-  return new_sese (entry, exit);
-}
-
-/* Returns the block preceding the entry of a SESE.  */
-
-static inline basic_block
-block_before_sese (sese sese)
-{
-  return SESE_ENTRY (sese)->src;
-}
-
-
-
 /* A single entry single exit specialized for conditions.  */
 
 typedef struct ifsese_s {
-  sese region;
-  sese true_region;
-  sese false_region;
+  sese_info_p region;
+  sese_info_p true_region;
+  sese_info_p false_region;
 } *ifsese;
 
-extern void if_region_set_false_region (ifsese, sese);
-extern ifsese move_sese_in_condition (sese);
+extern void if_region_set_false_region (ifsese, sese_info_p);
+extern ifsese move_sese_in_condition (sese_info_p);
 extern edge get_true_edge_from_guard_bb (basic_block);
 extern edge get_false_edge_from_guard_bb (basic_block);
 extern void set_ifsese_condition (ifsese, tree);
@@ -234,13 +255,13 @@ extern void set_ifsese_condition (ifsese, tree);
 static inline edge
 if_region_entry (ifsese if_region)
 {
-  return SESE_ENTRY (if_region->region);
+  return if_region->region->region.entry;
 }
 
 static inline edge
 if_region_exit (ifsese if_region)
 {
-  return SESE_EXIT (if_region->region);
+  return if_region->region->region.exit;
 }
 
 static inline basic_block
@@ -257,9 +278,14 @@ recompute_all_dominators (void)
   mark_irreducible_loops ();
   free_dominance_info (CDI_DOMINATORS);
   calculate_dominance_info (CDI_DOMINATORS);
+
+  free_dominance_info (CDI_POST_DOMINATORS);
+  calculate_dominance_info (CDI_POST_DOMINATORS);
 }
 
-typedef struct gimple_bb
+typedef std::pair <gimple *, tree> scalar_use;
+
+typedef struct gimple_poly_bb
 {
   basic_block bb;
   struct poly_bb *pbb;
@@ -284,10 +310,12 @@ typedef struct gimple_bb
      corresponding element in CONDITION_CASES is not NULL_TREE.  For a
      SWITCH_EXPR the corresponding element in CONDITION_CASES is a
      CASE_LABEL_EXPR.  */
-  vec<gimple> conditions;
-  vec<gimple> condition_cases;
+  vec<gimple *> conditions;
+  vec<gimple *> condition_cases;
   vec<data_reference_p> data_refs;
-} *gimple_bb_p;
+  vec<scalar_use> read_scalar_refs;
+  vec<tree> write_scalar_refs;
+} *gimple_poly_bb_p;
 
 #define GBB_BB(GBB) (GBB)->bb
 #define GBB_PBB(GBB) (GBB)->pbb
@@ -298,7 +326,7 @@ typedef struct gimple_bb
 /* Return the innermost loop that contains the basic block GBB.  */
 
 static inline struct loop *
-gbb_loop (struct gimple_bb *gbb)
+gbb_loop (gimple_poly_bb_p gbb)
 {
   return GBB_BB (gbb)->loop_father;
 }
@@ -307,7 +335,7 @@ gbb_loop (struct gimple_bb *gbb)
    If there is no corresponding gimple loop, we return NULL.  */
 
 static inline loop_p
-gbb_loop_at_index (gimple_bb_p gbb, sese region, int index)
+gbb_loop_at_index (gimple_poly_bb_p gbb, sese_l &region, int index)
 {
   loop_p loop = gbb_loop (gbb);
   int depth = sese_loop_depth (region, loop);
@@ -315,7 +343,7 @@ gbb_loop_at_index (gimple_bb_p gbb, sese region, int index)
   while (--depth > index)
     loop = loop_outer (loop);
 
-  gcc_assert (sese_contains_loop (region, loop));
+  gcc_assert (loop_in_sese_p (loop, region));
 
   return loop;
 }
@@ -323,7 +351,7 @@ gbb_loop_at_index (gimple_bb_p gbb, sese region, int index)
 /* The number of common loops in REGION for GBB1 and GBB2.  */
 
 static inline int
-nb_common_loops (sese region, gimple_bb_p gbb1, gimple_bb_p gbb2)
+nb_common_loops (sese_l &region, gimple_poly_bb_p gbb1, gimple_poly_bb_p gbb2)
 {
   loop_p l1 = gbb_loop (gbb1);
   loop_p l2 = gbb_loop (gbb2);
@@ -336,7 +364,7 @@ nb_common_loops (sese region, gimple_bb_p gbb1, gimple_bb_p gbb2)
    evolution analyzer.  */
 
 static inline bool
-scev_analyzable_p (tree def, sese region)
+scev_analyzable_p (tree def, sese_l &region)
 {
   loop_p loop;
   tree scev;

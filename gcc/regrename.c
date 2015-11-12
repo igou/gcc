@@ -1,5 +1,5 @@
 /* Register renaming for the GNU compiler.
-   Copyright (C) 2000-2014 Free Software Foundation, Inc.
+   Copyright (C) 2000-2015 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -20,33 +20,18 @@
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "rtl-error.h"
+#include "backend.h"
+#include "target.h"
+#include "rtl.h"
+#include "df.h"
 #include "tm_p.h"
 #include "insn-config.h"
 #include "regs.h"
-#include "addresses.h"
-#include "hard-reg-set.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "cfganal.h"
-#include "basic-block.h"
-#include "reload.h"
-#include "output.h"
-#include "recog.h"
-#include "flags.h"
-#include "obstack.h"
-#include "tree-pass.h"
-#include "df.h"
-#include "target.h"
 #include "emit-rtl.h"
+#include "recog.h"
+#include "addresses.h"
+#include "cfganal.h"
+#include "tree-pass.h"
 #include "regrename.h"
 
 /* This file implements the RTL register renaming pass of the compiler.  It is
@@ -145,6 +130,9 @@ static HARD_REG_SET live_hard_regs;
    record_operand_use.  */
 static operand_rr_info *cur_operand;
 
+/* Set while scanning RTL if a register dies.  Used to tie chains.  */
+static struct du_head *terminated_this_insn;
+
 /* Return the chain corresponding to id number ID.  Take into account that
    chains may have been merged.  */
 du_head_p
@@ -239,6 +227,8 @@ create_new_chain (unsigned this_regno, unsigned this_nregs, rtx *loc,
   head->nregs = this_nregs;
   head->need_caller_save_reg = 0;
   head->cannot_rename = 0;
+  head->renamed = 0;
+  head->tied_chain = NULL;
 
   id_to_chain.safe_push (head);
   head->id = current_id++;
@@ -333,10 +323,7 @@ check_new_reg_p (int reg ATTRIBUTE_UNUSED, int new_reg,
 	|| (crtl->is_leaf
 	    && !LEAF_REGISTERS[new_reg + i])
 #endif
-#ifdef HARD_REGNO_RENAME_OK
-	|| ! HARD_REGNO_RENAME_OK (reg + i, new_reg + i)
-#endif
-	)
+	|| ! HARD_REGNO_RENAME_OK (reg + i, new_reg + i))
       return false;
 
   /* See whether it accepts all modes that occur in
@@ -383,6 +370,13 @@ find_rename_reg (du_head_p this_head, enum reg_class super_class,
      in the chain.  */
   preferred_class
     = (enum reg_class) targetm.preferred_rename_class (super_class);
+
+  /* Pick and check the register from the tied chain iff the tied chain
+     is not renamed.  */
+  if (this_head->tied_chain && !this_head->tied_chain->renamed
+      && check_new_reg_p (old_reg, this_head->tied_chain->regno,
+			  this_head, *unavailable))
+    return this_head->tied_chain->regno;
 
   /* If PREFERRED_CLASS is not NO_REGS, we iterate in the first pass
      over registers that belong to PREFERRED_CLASS and try to find the
@@ -438,9 +432,8 @@ rename_chains (void)
   if (frame_pointer_needed)
     {
       add_to_hard_reg_set (&unavailable, Pmode, FRAME_POINTER_REGNUM);
-#if !HARD_FRAME_POINTER_IS_FRAME_POINTER
-      add_to_hard_reg_set (&unavailable, Pmode, HARD_FRAME_POINTER_REGNUM);
-#endif
+      if (!HARD_FRAME_POINTER_IS_FRAME_POINTER)
+	add_to_hard_reg_set (&unavailable, Pmode, HARD_FRAME_POINTER_REGNUM);
     }
 
   FOR_EACH_VEC_ELT (id_to_chain, i, this_head)
@@ -456,12 +449,10 @@ rename_chains (void)
 	continue;
 
       if (fixed_regs[reg] || global_regs[reg]
-#if !HARD_FRAME_POINTER_IS_FRAME_POINTER
-	  || (frame_pointer_needed && reg == HARD_FRAME_POINTER_REGNUM)
-#else
-	  || (frame_pointer_needed && reg == FRAME_POINTER_REGNUM)
-#endif
-	  )
+	  || (!HARD_FRAME_POINTER_IS_FRAME_POINTER && frame_pointer_needed
+	      && reg == HARD_FRAME_POINTER_REGNUM)
+	  || (HARD_FRAME_POINTER_REGNUM && frame_pointer_needed
+	      && reg == FRAME_POINTER_REGNUM))
 	continue;
 
       COPY_HARD_REG_SET (this_unavailable, unavailable);
@@ -505,12 +496,20 @@ rename_chains (void)
 	  continue;
 	}
 
-      if (dump_file)
-	fprintf (dump_file, ", renamed as %s\n", reg_names[best_new_reg]);
-
-      regrename_do_replace (this_head, best_new_reg);
-      tick[best_new_reg] = ++this_tick;
-      df_set_regs_ever_live (best_new_reg, true);
+      if (regrename_do_replace (this_head, best_new_reg))
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ", renamed as %s\n", reg_names[best_new_reg]);
+	  tick[best_new_reg] = ++this_tick;
+	  df_set_regs_ever_live (best_new_reg, true);
+	}
+      else
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ", renaming as %s failed\n",
+		     reg_names[best_new_reg]);
+	  tick[reg] = ++this_tick;
+	}
     }
 }
 
@@ -936,7 +935,13 @@ regrename_analyze (bitmap bb_mask)
     bb->aux = NULL;
 }
 
-void
+/* Attempt to replace all uses of the register in the chain beginning with
+   HEAD with REG.  Returns true on success and false if the replacement is
+   rejected because the insns would not validate.  The latter can happen
+   e.g. if a match_parallel predicate enforces restrictions on register
+   numbering in its subpatterns.  */
+
+bool
 regrename_do_replace (struct du_head *head, int reg)
 {
   struct du_chain *chain;
@@ -950,22 +955,27 @@ regrename_do_replace (struct du_head *head, int reg)
       int reg_ptr = REG_POINTER (*chain->loc);
 
       if (DEBUG_INSN_P (chain->insn) && REGNO (*chain->loc) != base_regno)
-	INSN_VAR_LOCATION_LOC (chain->insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	validate_change (chain->insn, &(INSN_VAR_LOCATION_LOC (chain->insn)),
+			 gen_rtx_UNKNOWN_VAR_LOC (), true);
       else
 	{
-	  *chain->loc = gen_raw_REG (GET_MODE (*chain->loc), reg);
+	  validate_change (chain->insn, chain->loc, 
+			   gen_raw_REG (GET_MODE (*chain->loc), reg), true);
 	  if (regno >= FIRST_PSEUDO_REGISTER)
 	    ORIGINAL_REGNO (*chain->loc) = regno;
 	  REG_ATTRS (*chain->loc) = attr;
 	  REG_POINTER (*chain->loc) = reg_ptr;
 	}
-
-      df_insn_rescan (chain->insn);
     }
 
+  if (!apply_change_group ())
+    return false;
+
   mode = GET_MODE (*head->first->loc);
+  head->renamed = 1;
   head->regno = reg;
   head->nregs = hard_regno_nregs[reg][mode];
+  return true;
 }
 
 
@@ -987,7 +997,7 @@ verify_reg_in_set (rtx op, HARD_REG_SET *pset)
     return false;
 
   regno = REGNO (op);
-  nregs = hard_regno_nregs[regno][GET_MODE (op)];
+  nregs = REG_NREGS (op);
   all_live = all_dead = true;
   while (nregs-- > 0)
     if (TEST_HARD_REG_BIT (*pset, regno + nregs))
@@ -1040,14 +1050,42 @@ scan_rtx_reg (rtx_insn *insn, rtx *loc, enum reg_class cl, enum scan_actions act
 {
   struct du_head **p;
   rtx x = *loc;
-  machine_mode mode = GET_MODE (x);
   unsigned this_regno = REGNO (x);
-  int this_nregs = hard_regno_nregs[this_regno][mode];
+  int this_nregs = REG_NREGS (x);
 
   if (action == mark_write)
     {
       if (type == OP_OUT)
-	create_new_chain (this_regno, this_nregs, loc, insn, cl);
+	{
+	  du_head_p c;
+	  rtx pat = PATTERN (insn);
+
+	  c = create_new_chain (this_regno, this_nregs, loc, insn, cl);
+
+	  /* We try to tie chains in a move instruction for
+	     a single output.  */
+	  if (recog_data.n_operands == 2
+	      && GET_CODE (pat) == SET
+	      && GET_CODE (SET_DEST (pat)) == REG
+	      && GET_CODE (SET_SRC (pat)) == REG
+	      && terminated_this_insn
+	      && terminated_this_insn->nregs
+		 == REG_NREGS (recog_data.operand[1]))
+	    {
+	      gcc_assert (terminated_this_insn->regno
+			  == REGNO (recog_data.operand[1]));
+
+	      c->tied_chain = terminated_this_insn;
+	      terminated_this_insn->tied_chain = c;
+
+	      if (dump_file)
+		fprintf (dump_file, "Tying chain %s (%d) with %s (%d)\n",
+			 reg_names[c->regno], c->id,
+			 reg_names[terminated_this_insn->regno],
+			 terminated_this_insn->id);
+	    }
+	}
+
       return;
     }
 
@@ -1155,6 +1193,8 @@ scan_rtx_reg (rtx_insn *insn, rtx *loc, enum reg_class cl, enum scan_actions act
 		SET_HARD_REG_BIT (live_hard_regs, head->regno + nregs);
 	    }
 
+	  if (action == terminate_dead)
+	    terminated_this_insn = *p;
 	  *p = next;
 	  if (dump_file)
 	    fprintf (dump_file,
@@ -1306,11 +1346,11 @@ scan_rtx_address (rtx_insn *insn, rtx *loc, enum reg_class cl,
     case PRE_INC:
     case PRE_DEC:
     case PRE_MODIFY:
-#ifndef AUTO_INC_DEC
       /* If the target doesn't claim to handle autoinc, this must be
 	 something special, like a stack push.  Kill this chain.  */
+    if (!AUTO_INC_DEC)
       action = mark_all_read;
-#endif
+
       break;
 
     case MEM:
@@ -1555,6 +1595,7 @@ build_def_use (basic_block bb)
 	  enum rtx_code set_code = SET;
 	  enum rtx_code clobber_code = CLOBBER;
 	  insn_rr_info *insn_info = NULL;
+	  terminated_this_insn = NULL;
 
 	  /* Process the insn, determining its effect on the def-use
 	     chains and live hard registers.  We perform the following
@@ -1628,13 +1669,8 @@ build_def_use (basic_block bb)
 		  && !(untracked_operands & (1 << i))
 		  && REG_P (op)
 		  && !verify_reg_tracked (op))
-		{
-		  machine_mode mode = GET_MODE (op);
-		  unsigned this_regno = REGNO (op);
-		  unsigned this_nregs = hard_regno_nregs[this_regno][mode];
-		  create_new_chain (this_regno, this_nregs, NULL, NULL,
-				    NO_REGS);
-		}
+		create_new_chain (REGNO (op), REG_NREGS (op), NULL, NULL,
+				  NO_REGS);
 	    }
 
 	  if (fail_current_block)

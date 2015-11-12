@@ -1,5 +1,5 @@
 /* Command line option handling.
-   Copyright (C) 2002-2014 Free Software Foundation, Inc.
+   Copyright (C) 2002-2015 Free Software Foundation, Inc.
    Contributed by Neil Booth.
 
 This file is part of GCC.
@@ -23,10 +23,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "intl.h"
 #include "coretypes.h"
 #include "opts.h"
-#include "options.h"
-#include "tm.h" /* For STACK_CHECK_BUILTIN,
-		   STACK_CHECK_STATIC_BUILTIN, DEFAULT_GDB_EXTENSIONS,
-		   DWARF2_DEBUGGING_INFO and DBX_DEBUGGING_INFO.  */
+#include "tm.h"
 #include "flags.h"
 #include "params.h"
 #include "diagnostic.h"
@@ -184,7 +181,8 @@ base_of_path (const char *path, const char **base_out)
 }
 
 /* What to print when a switch has no documentation.  */
-static const char undocumented_msg[] = N_("This switch lacks documentation");
+static const char undocumented_msg[] = N_("This option lacks documentation.");
+static const char use_diagnosed_msg[] = N_("Uses of this option are diagnosed.");
 
 typedef char *char_p; /* For DEF_VEC_P.  */
 
@@ -432,7 +430,7 @@ static const struct default_options default_options_table[] =
   {
     /* -O1 optimizations.  */
     { OPT_LEVELS_1_PLUS, OPT_fdefer_pop, NULL, 1 },
-#ifdef DELAY_SLOTS
+#if DELAY_SLOTS
     { OPT_LEVELS_1_PLUS, OPT_fdelayed_branch, NULL, 1 },
 #endif
     { OPT_LEVELS_1_PLUS, OPT_fguess_branch_probability, NULL, 1 },
@@ -444,16 +442,17 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS, OPT_fipa_reference, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fipa_profile, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fmerge_constants, NULL, 1 },
+    { OPT_LEVELS_1_PLUS, OPT_freorder_blocks, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fshrink_wrap, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fsplit_wide_types, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_ccp, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_ftree_bit_ccp, NULL, 1 },
+    { OPT_LEVELS_1_PLUS, OPT_ftree_coalesce_vars, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_dce, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_dominator_opts, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_dse, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_ter, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_ftree_sra, NULL, 1 },
-    { OPT_LEVELS_1_PLUS, OPT_ftree_copyrename, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_fre, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_copy_prop, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_sink, NULL, 1 },
@@ -486,13 +485,15 @@ static const struct default_options default_options_table[] =
 #endif
     { OPT_LEVELS_2_PLUS, OPT_fstrict_aliasing, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fstrict_overflow, NULL, 1 },
-    { OPT_LEVELS_2_PLUS, OPT_freorder_blocks, NULL, 1 },
+    { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_freorder_blocks_algorithm_, NULL,
+      REORDER_BLOCKS_ALGORITHM_STC },
     { OPT_LEVELS_2_PLUS, OPT_freorder_functions, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_vrp, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_builtin_call_dce, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_pre, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_switch_conversion, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fipa_cp, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fipa_cp_alignment, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fdevirtualize, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fdevirtualize_speculatively, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fipa_sra, NULL, 1 },
@@ -740,12 +741,26 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
 
   if (!opts->x_flag_opts_finished)
     {
+      /* We initialize opts->x_flag_pie to -1 so that targets can set a
+	 default value.  */
+      if (opts->x_flag_pie == -1)
+	{
+	  if (opts->x_flag_pic == 0)
+	    opts->x_flag_pie = DEFAULT_FLAG_PIE;
+	  else
+	    opts->x_flag_pie = 0;
+	}
       if (opts->x_flag_pie)
 	opts->x_flag_pic = opts->x_flag_pie;
       if (opts->x_flag_pic && !opts->x_flag_pie)
 	opts->x_flag_shlib = 1;
       opts->x_flag_opts_finished = true;
     }
+
+  /* We initialize opts->x_flag_stack_protect to -1 so that targets
+     can set a default value.  */
+  if (opts->x_flag_stack_protect == -1)
+    opts->x_flag_stack_protect = DEFAULT_FLAG_SSP;
 
   if (opts->x_optimize == 0)
     {
@@ -808,6 +823,16 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
       opts->x_flag_reorder_blocks_and_partition = 0;
       opts->x_flag_reorder_blocks = 1;
     }
+
+  /* Disable -freorder-blocks-and-partition when -fprofile-use is not in
+     effect. Function splitting was not actually being performed in that case,
+     as probably_never_executed_bb_p does not distinguish any basic blocks as
+     being cold vs hot when there is no profile data. Leaving it enabled,
+     however, causes the assembly code generator to create (empty) cold
+     sections and labels, leading to unnecessary size overhead.  */
+  if (opts->x_flag_reorder_blocks_and_partition
+      && !opts_set->x_flag_profile_use)
+    opts->x_flag_reorder_blocks_and_partition = 0;
 
   if (opts->x_flag_reorder_blocks_and_partition
       && !opts_set->x_flag_reorder_functions)
@@ -988,7 +1013,7 @@ print_filtered_help (unsigned int include_flags,
   const char *help;
   bool found = false;
   bool displayed = false;
-  char new_help[128];
+  char new_help[256];
 
   if (include_flags == CL_PARAMS)
     {
@@ -1064,7 +1089,46 @@ print_filtered_help (unsigned int include_flags,
 	{
 	  if (exclude_flags & CL_UNDOCUMENTED)
 	    continue;
+
 	  help = undocumented_msg;
+	}
+
+      if (option->alias_target < N_OPTS
+	  && cl_options [option->alias_target].help)
+	{
+	  if (help == undocumented_msg)
+	    {
+	      /* For undocumented options that are aliases for other options
+		 that are documented, point the reader to the other option in
+		 preference of the former.  */
+	      snprintf (new_help, sizeof new_help,
+			_("Same as %s.  Use the latter option instead."),
+			cl_options [option->alias_target].opt_text);
+	    }
+	  else
+	    {
+	      /* For documented options with aliases, mention the aliased
+		 option's name for reference.  */
+	      snprintf (new_help, sizeof new_help,
+			_("%s  Same as %s."),
+			help, cl_options [option->alias_target].opt_text);
+	    }
+
+	  help = new_help;
+	}
+
+      if (option->warn_message)
+	{
+	  /* Mention that the use of the option will trigger a warning.  */
+	  if (help == new_help)
+	    snprintf (new_help + strlen (new_help),
+		      sizeof new_help - strlen (new_help),
+		      "  %s", _(use_diagnosed_msg));
+	  else
+	    snprintf (new_help, sizeof new_help,
+		      "%s  %s", help, _(use_diagnosed_msg));
+
+	  help = new_help;
 	}
 
       /* Get the translation.  */
@@ -1106,7 +1170,7 @@ print_filtered_help (unsigned int include_flags,
 		      if (* (const char **) flag_var != NULL)
 			snprintf (new_help + strlen (new_help),
 				  sizeof (new_help) - strlen (new_help),
-				  * (const char **) flag_var);
+				  "%s", * (const char **) flag_var);
 		    }
 		  else if (option->var_type == CLVC_ENUM)
 		    {
@@ -1120,7 +1184,7 @@ print_filtered_help (unsigned int include_flags,
 			arg = _("[default]");
 		      snprintf (new_help + strlen (new_help),
 				sizeof (new_help) - strlen (new_help),
-				arg);
+				"%s", arg);
 		    }
 		  else
 		    sprintf (new_help + strlen (new_help),
@@ -1156,7 +1220,7 @@ print_filtered_help (unsigned int include_flags,
 	     options supported by a specific front end.  */
 	  for (i = 0; (1U << i) < CL_LANG_ALL; i ++)
 	    if ((1U << i) & langs)
-	      printf (_(" None found.  Use --help=%s to show *all* the options supported by the %s front-end\n"),
+	      printf (_(" None found.  Use --help=%s to show *all* the options supported by the %s front-end.\n"),
 		      lang_names[i], lang_names[i]);
 	}
 
@@ -1330,6 +1394,9 @@ enable_fdo_optimizations (struct gcc_options *opts,
   if (!opts_set->x_flag_ipa_cp_clone
       && value && opts->x_flag_ipa_cp)
     opts->x_flag_ipa_cp_clone = value;
+  if (!opts_set->x_flag_ipa_cp_alignment
+      && value && opts->x_flag_ipa_cp)
+    opts->x_flag_ipa_cp_alignment = value;
   if (!opts_set->x_flag_predictive_commoning)
     opts->x_flag_predictive_commoning = value;
   if (!opts_set->x_flag_unswitch_loops)
@@ -1382,7 +1449,7 @@ common_handle_option (struct gcc_options *opts,
 	unsigned int i;
 
 	if (lang_mask == CL_DRIVER)
-	  break;;
+	  break;
 
 	undoc_mask = ((opts->x_verbose_flag | opts->x_extra_warnings)
 		      ? 0
@@ -1580,6 +1647,8 @@ common_handle_option (struct gcc_options *opts,
 	      { "float-cast-overflow", SANITIZE_FLOAT_CAST,
 		sizeof "float-cast-overflow" - 1 },
 	      { "bounds", SANITIZE_BOUNDS, sizeof "bounds" - 1 },
+	      { "bounds-strict", SANITIZE_BOUNDS | SANITIZE_BOUNDS_STRICT,
+		sizeof "bounds-strict" - 1 },
 	      { "alignment", SANITIZE_ALIGNMENT, sizeof "alignment" - 1 },
 	      { "nonnull-attribute", SANITIZE_NONNULL_ATTRIBUTE,
 		sizeof "nonnull-attribute" - 1 },
@@ -1588,6 +1657,8 @@ common_handle_option (struct gcc_options *opts,
 		sizeof "returns-nonnull-attribute" - 1 },
 	      { "object-size", SANITIZE_OBJECT_SIZE,
 		sizeof "object-size" - 1 },
+	      { "vptr", SANITIZE_VPTR, sizeof "vptr" - 1 },
+	      { "all", ~0, sizeof "all" - 1 },
 	      { NULL, 0, 0 }
 	    };
 	    const char *comma;
@@ -1611,7 +1682,15 @@ common_handle_option (struct gcc_options *opts,
 		  && memcmp (p, spec[i].name, len) == 0)
 		{
 		  /* Handle both -fsanitize and -fno-sanitize cases.  */
-		  if (value)
+		  if (value && spec[i].flag == ~0U)
+		    {
+		      if (code == OPT_fsanitize_)
+			error_at (loc, "-fsanitize=all option is not valid");
+		      else
+			*flag |= ~(SANITIZE_USER_ADDRESS | SANITIZE_THREAD
+				   | SANITIZE_LEAK);
+		    }
+		  else if (value)
 		    *flag |= spec[i].flag;
 		  else
 		    *flag &= ~spec[i].flag;
@@ -1743,8 +1822,12 @@ common_handle_option (struct gcc_options *opts,
       break;
 
     case OPT_fdbg_cnt_:
+      /* Deferred.  */
+      break;
+
     case OPT_fdbg_cnt_list:
       /* Deferred.  */
+      opts->x_exit_after_options = true;
       break;
 
     case OPT_fdebug_prefix_map_:
@@ -2085,14 +2168,21 @@ handle_param (struct gcc_options *opts, struct gcc_options *opts_set,
 	      arg);
   else
     {
-      value = integral_argument (equal + 1);
-      if (value == -1)
-	error_at (loc, "invalid --param value %qs", equal + 1);
+      *equal = '\0';
+
+      enum compiler_param index;
+      if (!find_param (arg, &index))
+	error_at (loc, "invalid --param name %qs", arg);
       else
 	{
-	  *equal = '\0';
-	  set_param_value (arg, value,
-			   opts->x_param_values, opts_set->x_param_values);
+	  if (!param_string_value_p (index, equal + 1, &value))
+	    value = integral_argument (equal + 1);
+
+	  if (value == -1)
+	    error_at (loc, "invalid --param value %qs", equal + 1);
+	  else
+	    set_param_value (arg, value,
+			     opts->x_param_values, opts_set->x_param_values);
 	}
     }
 
@@ -2197,7 +2287,7 @@ set_debug_level (enum debug_info_type type, int extended, const char *arg,
 
 	  if (extended == 2)
 	    {
-#ifdef DWARF2_DEBUGGING_INFO
+#if defined DWARF2_DEBUGGING_INFO || defined DWARF2_LINENO_DEBUGGING_INFO
 	      opts->x_write_symbols = DWARF2_DEBUG;
 #elif defined DBX_DEBUGGING_INFO
 	      opts->x_write_symbols = DBX_DEBUG;
@@ -2254,10 +2344,11 @@ setup_core_dumping (diagnostic_context *dc)
   {
     struct rlimit rlim;
     if (getrlimit (RLIMIT_CORE, &rlim) != 0)
-      fatal_error ("getting core file size maximum limit: %m");
+      fatal_error (input_location, "getting core file size maximum limit: %m");
     rlim.rlim_cur = rlim.rlim_max;
     if (setrlimit (RLIMIT_CORE, &rlim) != 0)
-      fatal_error ("setting core file size limit to maximum: %m");
+      fatal_error (input_location,
+		   "setting core file size limit to maximum: %m");
   }
 #endif
   diagnostic_abort_on_error (dc);
@@ -2327,9 +2418,10 @@ enable_warning_as_error (const char *arg, int value, unsigned int lang_mask,
   strcpy (new_option + 1, arg);
   option_index = find_opt (new_option, lang_mask);
   if (option_index == OPT_SPECIAL_unknown)
-    {
-      error_at (loc, "-Werror=%s: no option -%s", arg, new_option);
-    }
+    error_at (loc, "-Werror=%s: no option -%s", arg, new_option);
+  else if (!(cl_options[option_index].flags & CL_WARNING))
+    error_at (loc, "-Werror=%s: -%s is not an option that controls warnings",
+	      arg, new_option);
   else
     {
       const diagnostic_t kind = value ? DK_ERROR : DK_WARNING;

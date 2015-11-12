@@ -1,5 +1,5 @@
 ;; Machine description for SPARC chip for GCC
-;;  Copyright (C) 1987-2014 Free Software Foundation, Inc.
+;;  Copyright (C) 1987-2015 Free Software Foundation, Inc.
 ;;  Contributed by Michael Tiemann (tiemann@cygnus.com)
 ;;  64-bit SPARC-V9 support by Michael Tiemann, Jim Wilson, and Doug Evans,
 ;;  at Cygnus Support.
@@ -2218,11 +2218,9 @@
           || which_alternative == 4
           || which_alternative == 5))
     {
-      REAL_VALUE_TYPE r;
       long i;
 
-      REAL_VALUE_FROM_CONST_DOUBLE (r, operands[1]);
-      REAL_VALUE_TO_TARGET_SINGLE (r, i);
+      REAL_VALUE_TO_TARGET_SINGLE (*CONST_DOUBLE_REAL_VALUE (operands[1]), i);
       operands[1] = GEN_INT (i);
     }
 
@@ -2265,11 +2263,9 @@
                    (match_operand:SF 2 "fp_const_high_losum_operand" "S")))]
   ""
 {
-  REAL_VALUE_TYPE r;
   long i;
 
-  REAL_VALUE_FROM_CONST_DOUBLE (r, operands[2]);
-  REAL_VALUE_TO_TARGET_SINGLE (r, i);
+  REAL_VALUE_TO_TARGET_SINGLE (*CONST_DOUBLE_REAL_VALUE (operands[2]), i);
   operands[2] = GEN_INT (i);
   return "or\t%1, %%lo(%a2), %0";
 })
@@ -2279,11 +2275,9 @@
         (high:SF (match_operand:SF 1 "fp_const_high_losum_operand" "S")))]
   ""
 {
-  REAL_VALUE_TYPE r;
   long i;
 
-  REAL_VALUE_FROM_CONST_DOUBLE (r, operands[1]);
-  REAL_VALUE_TO_TARGET_SINGLE (r, i);
+  REAL_VALUE_TO_TARGET_SINGLE (*CONST_DOUBLE_REAL_VALUE (operands[1]), i);
   operands[1] = GEN_INT (i);
   return "sethi\t%%hi(%1), %0";
 })
@@ -2364,7 +2358,7 @@
    && reload_completed"
   [(clobber (const_int 0))]
 {
-  operands[0] = gen_rtx_raw_REG (DImode, REGNO (operands[0]));
+  operands[0] = gen_raw_REG (DImode, REGNO (operands[0]));
 
   if (TARGET_ARCH64)
     {
@@ -3045,30 +3039,10 @@
   "! TARGET_ARCH64"
   "#"
   "&& reload_completed"
-  [(set (match_dup 2) (match_dup 3))
-   (set (match_dup 4) (match_dup 5))]
-{
-  rtx dest1, dest2;
-
-  dest1 = gen_highpart (SImode, operands[0]);
-  dest2 = gen_lowpart (SImode, operands[0]);
-
-  /* Swap the order in case of overlap.  */
-  if (REGNO (dest1) == REGNO (operands[1]))
-    {
-      operands[2] = dest2;
-      operands[3] = operands[1];
-      operands[4] = dest1;
-      operands[5] = const0_rtx;
-    }
-  else
-    {
-      operands[2] = dest1;
-      operands[3] = const0_rtx;
-      operands[4] = dest2;
-      operands[5] = operands[1];
-    }
-}
+  [(set (match_dup 2) (match_dup 1))
+   (set (match_dup 3) (const_int 0))]
+  "operands[2] = gen_lowpart (SImode, operands[0]);
+   operands[3] = gen_highpart (SImode, operands[0]);"
   [(set_attr "length" "2")])
 
 ;; Simplify comparisons of extended values.
@@ -3681,7 +3655,7 @@
   if (! TARGET_ARCH64)
     {
       emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2,
-			  gen_rtx_SET (VOIDmode, operands[0],
+			  gen_rtx_SET (operands[0],
 				   gen_rtx_PLUS (DImode, operands[1],
 						 operands[2])),
 			  gen_rtx_CLOBBER (VOIDmode,
@@ -3760,7 +3734,7 @@
                                (ltu:SI (reg:CC_NOOV CC_REG) (const_int 0))))
    (set (match_dup 4) (const_int 0))]
   "operands[3] = gen_lowpart (SImode, operands[0]);
-   operands[4] = gen_highpart_mode (SImode, DImode, operands[1]);"
+   operands[4] = gen_highpart (SImode, operands[0]);"
   [(set_attr "length" "2")])
 
 (define_insn "*addx_extend_sp64"
@@ -3782,7 +3756,7 @@
   [(set_attr "type" "ialuX")])
 
 (define_insn_and_split "*adddi3_extend_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
         (plus:DI (zero_extend:DI (match_operand:SI 1 "register_operand" "r"))
                  (match_operand:DI 2 "register_operand" "r")))
    (clobber (reg:CC CC_REG))]
@@ -3871,7 +3845,7 @@
   if (! TARGET_ARCH64)
     {
       emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2,
-			  gen_rtx_SET (VOIDmode, operands[0],
+			  gen_rtx_SET (operands[0],
 				   gen_rtx_MINUS (DImode, operands[1],
 						  operands[2])),
 			  gen_rtx_CLOBBER (VOIDmode,
@@ -3881,7 +3855,7 @@
 })
 
 (define_insn_and_split "*subdi3_insn_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(minus:DI (match_operand:DI 1 "register_operand" "r")
 		  (match_operand:DI 2 "arith_double_operand" "rHI")))
    (clobber (reg:CC CC_REG))]
@@ -3937,7 +3911,7 @@
   "subx\t%r1, %2, %0"
   [(set_attr "type" "ialuX")])
 
-(define_insn_and_split "*subx_extend"
+(define_insn_and_split "*subx_extend_sp32"
   [(set (match_operand:DI 0 "register_operand" "=r")
 	(zero_extend:DI (minus:SI (minus:SI (match_operand:SI 1 "register_or_zero_operand" "rJ")
                                             (match_operand:SI 2 "arith_operand" "rI"))
@@ -3953,7 +3927,7 @@
   [(set_attr "length" "2")])
 
 (define_insn_and_split "*subdi3_extend_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
       (minus:DI (match_operand:DI 1 "register_operand" "r")
                 (zero_extend:DI (match_operand:SI 2 "register_operand" "r"))))
    (clobber (reg:CC CC_REG))]
@@ -4757,7 +4731,7 @@
 })
 
 (define_insn_and_split "*and_not_di_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(and:DI (not:DI (match_operand:DI 1 "register_operand" "%r"))
 		(match_operand:DI 2 "register_operand" "r")))]
   "! TARGET_ARCH64"
@@ -4834,7 +4808,7 @@
 })
 
 (define_insn_and_split "*or_not_di_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(ior:DI (not:DI (match_operand:DI 1 "register_operand" "r"))
 		(match_operand:DI 2 "register_operand" "r")))]
   "! TARGET_ARCH64"
@@ -4959,7 +4933,7 @@
 ;; xnor patterns.  Note that (a ^ ~b) == (~a ^ b) == ~(a ^ b).
 ;; Combine now canonicalizes to the rightmost expression.
 (define_insn_and_split "*xor_not_di_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(not:DI (xor:DI (match_operand:DI 1 "register_operand" "r")
 			(match_operand:DI 2 "register_operand" "r"))))]
   "! TARGET_ARCH64"
@@ -5152,7 +5126,7 @@
       emit_insn (gen_rtx_PARALLEL
 		 (VOIDmode,
 		  gen_rtvec (2,
-			     gen_rtx_SET (VOIDmode, operand0,
+			     gen_rtx_SET (operand0,
 					  gen_rtx_NEG (DImode, operand1)),
 			     gen_rtx_CLOBBER (VOIDmode,
 					      gen_rtx_REG (CCmode,
@@ -5162,7 +5136,7 @@
 })
 
 (define_insn_and_split "*negdi2_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(neg:DI (match_operand:DI 1 "register_operand" "r")))
    (clobber (reg:CC CC_REG))]
   "! TARGET_ARCH64"
@@ -5237,7 +5211,7 @@
   "")
 
 (define_insn_and_split "*one_cmpldi2_sp32"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "register_operand" "=&r")
 	(not:DI (match_operand:DI 1 "register_operand" "r")))]
   "! TARGET_ARCH64"
   "#"
@@ -6209,7 +6183,7 @@
 	  (gen_rtx_PARALLEL
 	   (VOIDmode,
 	    gen_rtvec (3,
-		       gen_rtx_SET (VOIDmode, pc_rtx, XEXP (operands[0], 0)),
+		       gen_rtx_SET (pc_rtx, XEXP (operands[0], 0)),
 		       operands[3],
 		       gen_rtx_CLOBBER (VOIDmode, gen_rtx_REG (Pmode, 15)))));
       else
@@ -6217,7 +6191,7 @@
 	  (gen_rtx_PARALLEL
 	   (VOIDmode,
 	    gen_rtvec (2,
-		       gen_rtx_SET (VOIDmode, pc_rtx, XEXP (operands[0], 0)),
+		       gen_rtx_SET (pc_rtx, XEXP (operands[0], 0)),
 		       gen_rtx_CLOBBER (VOIDmode, gen_rtx_REG (Pmode, 15)))));
       goto finish_call;
     }
@@ -6361,7 +6335,7 @@
   fn_rtx = operands[1];
 
   vec = gen_rtvec (2,
-		   gen_rtx_SET (VOIDmode, operands[0],
+		   gen_rtx_SET (operands[0],
 				gen_rtx_CALL (VOIDmode, fn_rtx, const0_rtx)),
 		   gen_rtx_CLOBBER (VOIDmode, gen_rtx_REG (Pmode, 15)));
 
@@ -6418,17 +6392,20 @@
   ""
 {
   rtx valreg1 = gen_rtx_REG (DImode, 8);
-  rtx valreg2 = gen_rtx_REG (TARGET_ARCH64 ? TFmode : DFmode, 32);
   rtx result = operands[1];
 
   /* Pass constm1 to indicate that it may expect a structure value, but
      we don't know what size it is.  */
-  emit_call_insn (GEN_CALL (operands[0], const0_rtx, NULL, constm1_rtx));
+  emit_call_insn (gen_call (operands[0], const0_rtx, NULL, constm1_rtx));
 
   /* Save the function value registers.  */
   emit_move_insn (adjust_address (result, DImode, 0), valreg1);
-  emit_move_insn (adjust_address (result, TARGET_ARCH64 ? TFmode : DFmode, 8),
-				  valreg2);
+  if (TARGET_FPU)
+    {
+      rtx valreg2 = gen_rtx_REG (TARGET_ARCH64 ? TFmode : DFmode, 32);
+      emit_move_insn (adjust_address (result, TARGET_ARCH64 ? TFmode : DFmode, 8),
+                      valreg2);
+    }
 
   /* The optimizer does not know that the call sets the function value
      registers we stored in the result block.  We avoid problems by
@@ -6640,7 +6617,6 @@
   ""
 {
   rtx valreg1 = gen_rtx_REG (DImode, 24);
-  rtx valreg2 = gen_rtx_REG (TARGET_ARCH64 ? TFmode : DFmode, 32);
   rtx result = operands[0];
 
   if (! TARGET_ARCH64)
@@ -6657,14 +6633,18 @@
       emit_insn (gen_update_return (rtnreg, value));
     }
 
-  /* Reload the function value registers.  */
+  /* Reload the function value registers.
+     Put USE insns before the return.  */
   emit_move_insn (valreg1, adjust_address (result, DImode, 0));
-  emit_move_insn (valreg2,
-		  adjust_address (result, TARGET_ARCH64 ? TFmode : DFmode, 8));
-
-  /* Put USE insns before the return.  */
   emit_use (valreg1);
-  emit_use (valreg2);
+
+  if (TARGET_FPU)
+    {
+      rtx valreg2 = gen_rtx_REG (TARGET_ARCH64 ? TFmode : DFmode, 32);
+      emit_move_insn (valreg2,
+		      adjust_address (result, TARGET_ARCH64 ? TFmode : DFmode, 8));
+      emit_use (valreg2);
+    }
 
   /* Construct the return.  */
   expand_naked_return ();
@@ -6724,8 +6704,8 @@
    (set (match_dup 2) (match_dup 3))]
   ""
 {
-  operands[0] = adjust_address_nv (operands[0], Pmode, 0);
-  operands[2] = adjust_address_nv (operands[0], Pmode, GET_MODE_SIZE (Pmode));
+  operands[0] = adjust_address (operands[0], Pmode, 0);
+  operands[2] = adjust_address (operands[0], Pmode, GET_MODE_SIZE (Pmode));
   operands[3] = gen_rtx_REG (Pmode, RETURN_ADDR_REGNUM);
 })
 
@@ -6734,7 +6714,7 @@
 	(match_operand 1 "memory_operand" ""))]
   ""
 {
-  operands[1] = adjust_address_nv (operands[1], Pmode, 0);
+  operands[1] = adjust_address (operands[1], Pmode, 0);
 })
 
 (define_expand "nonlocal_goto"
@@ -6746,9 +6726,9 @@
 {
   rtx i7 = gen_rtx_REG (Pmode, RETURN_ADDR_REGNUM);
   rtx r_label = copy_to_reg (operands[1]);
-  rtx r_sp = adjust_address_nv (operands[2], Pmode, 0);
+  rtx r_sp = adjust_address (operands[2], Pmode, 0);
   rtx r_fp = operands[3];
-  rtx r_i7 = adjust_address_nv (operands[2], Pmode, GET_MODE_SIZE (Pmode));
+  rtx r_i7 = adjust_address (operands[2], Pmode, GET_MODE_SIZE (Pmode));
 
   /* We need to flush all the register windows so that their contents will
      be re-synchronized by the restore insn of the target function.  */

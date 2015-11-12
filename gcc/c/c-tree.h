@@ -1,5 +1,5 @@
 /* Definitions for C parsing and type checking.
-   Copyright (C) 1987-2014 Free Software Foundation, Inc.
+   Copyright (C) 1987-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -355,12 +355,12 @@ enum c_declarator_kind {
   cdk_attrs
 };
 
-typedef struct c_arg_tag_d {
+struct c_arg_tag {
   /* The argument name.  */
   tree id;
   /* The type of the argument.  */
   tree type;
-} c_arg_tag;
+};
 
 
 /* Information about the parameters in a function declarator.  */
@@ -640,13 +640,15 @@ extern tree c_finish_bc_stmt (location_t, tree *, bool);
 extern tree c_finish_goto_label (location_t, tree);
 extern tree c_finish_goto_ptr (location_t, tree);
 extern tree c_expr_to_decl (tree, bool *, bool *);
+extern tree c_finish_omp_construct (location_t, enum tree_code, tree, tree);
+extern tree c_finish_oacc_data (location_t, tree, tree);
 extern tree c_begin_omp_parallel (void);
 extern tree c_finish_omp_parallel (location_t, tree, tree);
 extern tree c_begin_omp_task (void);
 extern tree c_finish_omp_task (location_t, tree, tree);
 extern void c_finish_omp_cancel (location_t, tree);
 extern void c_finish_omp_cancellation_point (location_t, tree);
-extern tree c_finish_omp_clauses (tree);
+extern tree c_finish_omp_clauses (tree, bool, bool = false);
 extern tree c_build_va_arg (location_t, tree, tree);
 extern tree c_finish_transaction (location_t, tree, int);
 extern bool c_tree_equal (tree, tree);
@@ -667,10 +669,6 @@ extern int current_function_returns_null;
    a call to a noreturn function is seen.  */
 
 extern int current_function_returns_abnormally;
-
-/* Mode used to build pointers (VOIDmode means ptr_mode).  */
-
-extern machine_mode c_default_pointer_mode;
 
 /* In c-decl.c */
 
@@ -696,13 +694,13 @@ typedef void c_binding_oracle_function (enum c_oracle_request, tree identifier);
 extern c_binding_oracle_function *c_binding_oracle;
 
 extern void c_finish_incomplete_decl (tree);
-extern void c_write_global_declarations (void);
 extern tree c_omp_reduction_id (enum tree_code, tree);
 extern tree c_omp_reduction_decl (tree);
 extern tree c_omp_reduction_lookup (tree, tree);
 extern tree c_check_omp_declare_reduction_r (tree *, int *, void *);
 extern void c_pushtag (location_t, tree, tree);
 extern void c_bind (location_t, tree, bool);
+extern bool tag_exists_p (enum tree_code, tree);
 
 /* In c-errors.c */
 extern void pedwarn_c90 (location_t, int opt, const char *, ...)

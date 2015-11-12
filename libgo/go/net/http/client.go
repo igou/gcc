@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -100,6 +101,30 @@ type RoundTripper interface {
 // Given a string of the form "host", "host:port", or "[ipv6::address]:port",
 // return true if the string includes a port.
 func hasPort(s string) bool { return strings.LastIndex(s, ":") > strings.LastIndex(s, "]") }
+
+// refererForURL returns a referer without any authentication info or
+// an empty string if lastReq scheme is https and newReq scheme is http.
+func refererForURL(lastReq, newReq *url.URL) string {
+	// https://tools.ietf.org/html/rfc7231#section-5.5.2
+	//   "Clients SHOULD NOT include a Referer header field in a
+	//    (non-secure) HTTP request if the referring page was
+	//    transferred with a secure protocol."
+	if lastReq.Scheme == "https" && newReq.Scheme == "http" {
+		return ""
+	}
+	referer := lastReq.String()
+	if lastReq.User != nil {
+		// This is not very efficient, but is the best we can
+		// do without:
+		// - introducing a new method on URL
+		// - creating a race condition
+		// - copying the URL struct manually, which would cause
+		//   maintenance problems down the line
+		auth := lastReq.User.String() + "@"
+		referer = strings.Replace(referer, auth, "", 1)
+	}
+	return referer
+}
 
 // Used in Send to implement io.ReadCloser by bundling together the
 // bufio.Reader through which we read the response, and the underlying
@@ -187,7 +212,7 @@ func send(req *Request, t RoundTripper) (resp *Response, err error) {
 		req.Header = make(Header)
 	}
 
-	if u := req.URL.User; u != nil {
+	if u := req.URL.User; u != nil && req.Header.Get("Authorization") == "" {
 		username := u.Username()
 		password, _ := u.Password()
 		req.Header.Set("Authorization", "Basic "+basicAuth(username, password))
@@ -232,8 +257,9 @@ func shouldRedirectPost(statusCode int) bool {
 	return false
 }
 
-// Get issues a GET to the specified URL.  If the response is one of the following
-// redirect codes, Get follows the redirect, up to a maximum of 10 redirects:
+// Get issues a GET to the specified URL. If the response is one of
+// the following redirect codes, Get follows the redirect, up to a
+// maximum of 10 redirects:
 //
 //    301 (Moved Permanently)
 //    302 (Found)
@@ -248,13 +274,16 @@ func shouldRedirectPost(statusCode int) bool {
 // Caller should close resp.Body when done reading from it.
 //
 // Get is a wrapper around DefaultClient.Get.
+//
+// To make a request with custom headers, use NewRequest and
+// DefaultClient.Do.
 func Get(url string) (resp *Response, err error) {
 	return DefaultClient.Get(url)
 }
 
-// Get issues a GET to the specified URL.  If the response is one of the
+// Get issues a GET to the specified URL. If the response is one of the
 // following redirect codes, Get follows the redirect after calling the
-// Client's CheckRedirect function.
+// Client's CheckRedirect function:
 //
 //    301 (Moved Permanently)
 //    302 (Found)
@@ -267,6 +296,8 @@ func Get(url string) (resp *Response, err error) {
 //
 // When err is nil, resp always contains a non-nil resp.Body.
 // Caller should close resp.Body when done reading from it.
+//
+// To make a request with custom headers, use NewRequest and Client.Do.
 func (c *Client) Get(url string) (resp *Response, err error) {
 	req, err := NewRequest("GET", url, nil)
 	if err != nil {
@@ -274,6 +305,8 @@ func (c *Client) Get(url string) (resp *Response, err error) {
 	}
 	return c.doFollowingRedirects(req, shouldRedirectGet)
 }
+
+func alwaysFalse() bool { return false }
 
 func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bool) (resp *Response, err error) {
 	var base *url.URL
@@ -292,7 +325,10 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 	req := ireq
 
 	var timer *time.Timer
+	var atomicWasCanceled int32 // atomic bool (1 or 0)
+	var wasCanceled = alwaysFalse
 	if c.Timeout > 0 {
+		wasCanceled = func() bool { return atomic.LoadInt32(&atomicWasCanceled) != 0 }
 		type canceler interface {
 			CancelRequest(*Request)
 		}
@@ -301,6 +337,7 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 			return nil, fmt.Errorf("net/http: Client Transport of type %T doesn't support CancelRequest; Timeout not supported", c.transport())
 		}
 		timer = time.AfterFunc(c.Timeout, func() {
+			atomic.StoreInt32(&atomicWasCanceled, 1)
 			reqmu.Lock()
 			defer reqmu.Unlock()
 			tr.CancelRequest(req)
@@ -324,8 +361,8 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 			if len(via) > 0 {
 				// Add the Referer header.
 				lastReq := via[len(via)-1]
-				if lastReq.URL.Scheme != "https" {
-					nreq.Header.Set("Referer", lastReq.URL.String())
+				if ref := refererForURL(lastReq.URL, nreq.URL); ref != "" {
+					nreq.Header.Set("Referer", ref)
 				}
 
 				err = redirectChecker(nreq, via)
@@ -341,6 +378,12 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 
 		urlStr = req.URL.String()
 		if resp, err = c.send(req); err != nil {
+			if wasCanceled() {
+				err = &httpError{
+					err:     err.Error() + " (Client.Timeout exceeded while awaiting headers)",
+					timeout: true,
+				}
+			}
 			break
 		}
 
@@ -353,7 +396,7 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 			}
 			resp.Body.Close()
 			if urlStr = resp.Header.Get("Location"); urlStr == "" {
-				err = errors.New(fmt.Sprintf("%d response missing Location header", resp.StatusCode))
+				err = fmt.Errorf("%d response missing Location header", resp.StatusCode)
 				break
 			}
 			base = req.URL
@@ -361,7 +404,11 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 			continue
 		}
 		if timer != nil {
-			resp.Body = &cancelTimerBody{timer, resp.Body}
+			resp.Body = &cancelTimerBody{
+				t:              timer,
+				rc:             resp.Body,
+				reqWasCanceled: wasCanceled,
+			}
 		}
 		return resp, nil
 	}
@@ -376,7 +423,7 @@ func (c *Client) doFollowingRedirects(ireq *Request, shouldRedirect func(int) bo
 	if redirectFailed {
 		// Special case for Go 1 compatibility: return both the response
 		// and an error if the CheckRedirect function failed.
-		// See http://golang.org/issue/3795
+		// See https://golang.org/issue/3795
 		return resp, urlErr
 	}
 
@@ -397,7 +444,12 @@ func defaultCheckRedirect(req *Request, via []*Request) error {
 //
 // Caller should close resp.Body when done reading from it.
 //
-// Post is a wrapper around DefaultClient.Post
+// If the provided body is an io.Closer, it is closed after the
+// request.
+//
+// Post is a wrapper around DefaultClient.Post.
+//
+// To set custom headers, use NewRequest and DefaultClient.Do.
 func Post(url string, bodyType string, body io.Reader) (resp *Response, err error) {
 	return DefaultClient.Post(url, bodyType, body)
 }
@@ -406,8 +458,10 @@ func Post(url string, bodyType string, body io.Reader) (resp *Response, err erro
 //
 // Caller should close resp.Body when done reading from it.
 //
-// If the provided body is also an io.Closer, it is closed after the
+// If the provided body is an io.Closer, it is closed after the
 // request.
+//
+// To set custom headers, use NewRequest and Client.Do.
 func (c *Client) Post(url string, bodyType string, body io.Reader) (resp *Response, err error) {
 	req, err := NewRequest("POST", url, body)
 	if err != nil {
@@ -420,16 +474,22 @@ func (c *Client) Post(url string, bodyType string, body io.Reader) (resp *Respon
 // PostForm issues a POST to the specified URL, with data's keys and
 // values URL-encoded as the request body.
 //
+// The Content-Type header is set to application/x-www-form-urlencoded.
+// To set other headers, use NewRequest and DefaultClient.Do.
+//
 // When err is nil, resp always contains a non-nil resp.Body.
 // Caller should close resp.Body when done reading from it.
 //
-// PostForm is a wrapper around DefaultClient.PostForm
+// PostForm is a wrapper around DefaultClient.PostForm.
 func PostForm(url string, data url.Values) (resp *Response, err error) {
 	return DefaultClient.PostForm(url, data)
 }
 
 // PostForm issues a POST to the specified URL,
-// with data's keys and values urlencoded as the request body.
+// with data's keys and values URL-encoded as the request body.
+//
+// The Content-Type header is set to application/x-www-form-urlencoded.
+// To set other headers, use NewRequest and DefaultClient.Do.
 //
 // When err is nil, resp always contains a non-nil resp.Body.
 // Caller should close resp.Body when done reading from it.
@@ -437,9 +497,9 @@ func (c *Client) PostForm(url string, data url.Values) (resp *Response, err erro
 	return c.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 }
 
-// Head issues a HEAD to the specified URL.  If the response is one of the
-// following redirect codes, Head follows the redirect after calling the
-// Client's CheckRedirect function.
+// Head issues a HEAD to the specified URL.  If the response is one of
+// the following redirect codes, Head follows the redirect, up to a
+// maximum of 10 redirects:
 //
 //    301 (Moved Permanently)
 //    302 (Found)
@@ -453,7 +513,7 @@ func Head(url string) (resp *Response, err error) {
 
 // Head issues a HEAD to the specified URL.  If the response is one of the
 // following redirect codes, Head follows the redirect after calling the
-// Client's CheckRedirect function.
+// Client's CheckRedirect function:
 //
 //    301 (Moved Permanently)
 //    302 (Found)
@@ -467,15 +527,25 @@ func (c *Client) Head(url string) (resp *Response, err error) {
 	return c.doFollowingRedirects(req, shouldRedirectGet)
 }
 
+// cancelTimerBody is an io.ReadCloser that wraps rc with two features:
+// 1) on Read EOF or Close, the timer t is Stopped,
+// 2) On Read failure, if reqWasCanceled is true, the error is wrapped and
+//    marked as net.Error that hit its timeout.
 type cancelTimerBody struct {
-	t  *time.Timer
-	rc io.ReadCloser
+	t              *time.Timer
+	rc             io.ReadCloser
+	reqWasCanceled func() bool
 }
 
 func (b *cancelTimerBody) Read(p []byte) (n int, err error) {
 	n, err = b.rc.Read(p)
 	if err == io.EOF {
 		b.t.Stop()
+	} else if err != nil && b.reqWasCanceled() {
+		return n, &httpError{
+			err:     err.Error() + " (Client.Timeout exceeded while reading body)",
+			timeout: true,
+		}
 	}
 	return
 }

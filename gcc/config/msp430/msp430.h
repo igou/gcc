@@ -1,5 +1,5 @@
 /* GCC backend definitions for the TI MSP430 Processor
-   Copyright (C) 2012-2014 Free Software Foundation, Inc.
+   Copyright (C) 2012-2015 Free Software Foundation, Inc.
    Contributed by Red Hat.
 
    This file is part of GCC.
@@ -56,6 +56,8 @@ extern bool msp430x;
   "%{mrelax=-mQ} " /* Pass the relax option on to the assembler.  */ \
   "%{mlarge:-ml} " /* Tell the assembler if we are building for the LARGE pointer model.  */ \
   "%{!msim:-md} %{msim:%{mlarge:-md}} " /* Copy data from ROM to RAM if necessary.  */ \
+  "%{msilicon-errata=*:-msilicon-errata=%*} " /* Pass on -msilicon-errata.  */ \
+  "%{msilicon-errata-warn=*:-msilicon-errata-warn=%*} " /* Pass on -msilicon-errata-warn.  */ \
   "%{ffunction-sections:-gdwarf-sections} " /* If function sections are being created then create DWARF line number sections as well.  */
 
 /* Enable linker section garbage collection by default, unless we
@@ -166,7 +168,7 @@ extern bool msp430x;
 #define HAS_LONG_UNCOND_BRANCH		0
 
 #define LOAD_EXTEND_OP(M)		ZERO_EXTEND
-/*#define WORD_REGISTER_OPERATIONS	1*/
+#define WORD_REGISTER_OPERATIONS	1
 
 #define MOVE_MAX 			8
 #define STARTING_FRAME_OFFSET		0
@@ -404,3 +406,9 @@ typedef struct
   msp430_start_function ((FILE), (NAME), (DECL))
 
 #define TARGET_HAS_NO_HW_DIVIDE (! TARGET_HWMULT)
+
+#undef  USE_SELECT_SECTION_FOR_FUNCTIONS
+#define USE_SELECT_SECTION_FOR_FUNCTIONS 1
+
+#define ASM_OUTPUT_ALIGNED_DECL_COMMON(FILE, DECL, NAME, SIZE, ALIGN)	\
+  msp430_output_aligned_decl_common ((FILE), (DECL), (NAME), (SIZE), (ALIGN))

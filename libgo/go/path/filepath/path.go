@@ -4,6 +4,9 @@
 
 // Package filepath implements utility routines for manipulating filename paths
 // in a way compatible with the target operating system-defined file paths.
+//
+// Functions in this package replace any occurrences of the slash ('/') character
+// with os.PathSeparator when returning paths unless otherwise specified.
 package filepath
 
 import (
@@ -174,7 +177,8 @@ func FromSlash(path string) string {
 
 // SplitList splits a list of paths joined by the OS-specific ListSeparator,
 // usually found in PATH or GOPATH environment variables.
-// Unlike strings.Split, SplitList returns an empty slice when passed an empty string.
+// Unlike strings.Split, SplitList returns an empty slice when passed an empty
+// string. SplitList does not replace slash characters in the returned paths.
 func SplitList(path string) []string {
 	return splitList(path)
 }
@@ -196,13 +200,10 @@ func Split(path string) (dir, file string) {
 // Join joins any number of path elements into a single path, adding
 // a Separator if necessary. The result is Cleaned, in particular
 // all empty strings are ignored.
+// On Windows, the result is a UNC path if and only if the first path
+// element is a UNC path.
 func Join(elem ...string) string {
-	for i, e := range elem {
-		if e != "" {
-			return Clean(strings.Join(elem[i:], string(Separator)))
-		}
-	}
-	return ""
+	return join(elem)
 }
 
 // Ext returns the file name extension used by path.
@@ -231,6 +232,10 @@ func EvalSymlinks(path string) (string, error) {
 // working directory to turn it into an absolute path.  The absolute
 // path name for a given file is not guaranteed to be unique.
 func Abs(path string) (string, error) {
+	return abs(path)
+}
+
+func unixAbs(path string) (string, error) {
 	if IsAbs(path) {
 		return Clean(path), nil
 	}
@@ -330,10 +335,11 @@ var SkipDir = errors.New("skip this directory")
 // If there was a problem walking to the file or directory named by path, the
 // incoming error will describe the problem and the function can decide how
 // to handle that error (and Walk will not descend into that directory). If
-// an error is returned, processing stops. The sole exception is that if path
-// is a directory and the function returns the special value SkipDir, the
-// contents of the directory are skipped and processing continues as usual on
-// the next file.
+// an error is returned, processing stops. The sole exception is when the function
+// returns the special value SkipDir. If the function returns SkipDir when invoked
+// on a directory, Walk skips the directory's contents entirely.
+// If the function returns SkipDir when invoked on a non-directory file,
+// Walk skips the remaining files in the containing directory.
 type WalkFunc func(path string, info os.FileInfo, err error) error
 
 var lstat = os.Lstat // for testing
@@ -448,20 +454,13 @@ func Dir(path string) string {
 		i--
 	}
 	dir := Clean(path[len(vol) : i+1])
-	last := len(dir) - 1
-	if last > 0 && os.IsPathSeparator(dir[last]) {
-		dir = dir[:last]
-	}
-	if dir == "" {
-		dir = "."
-	}
 	return vol + dir
 }
 
 // VolumeName returns leading volume name.
-// Given "C:\foo\bar" it returns "C:" under windows.
+// Given "C:\foo\bar" it returns "C:" on Windows.
 // Given "\\host\share\foo" it returns "\\host\share".
 // On other platforms it returns "".
-func VolumeName(path string) (v string) {
+func VolumeName(path string) string {
 	return path[:volumeNameLen(path)]
 }

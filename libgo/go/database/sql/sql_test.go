@@ -24,7 +24,14 @@ func init() {
 	}
 	freedFrom := make(map[dbConn]string)
 	putConnHook = func(db *DB, c *driverConn) {
-		if c.listElem != nil {
+		idx := -1
+		for i, v := range db.freeConn {
+			if v == c {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
 			// print before panic, as panic may get lost due to conflicting panic
 			// (all goroutines asleep) elsewhere, since we might not unlock
 			// the mutex in freeConn here.
@@ -79,15 +86,14 @@ func closeDB(t testing.TB, db *DB) {
 			t.Errorf("Error closing fakeConn: %v", err)
 		}
 	})
-	for node, i := db.freeConn.Front(), 0; node != nil; node, i = node.Next(), i+1 {
-		dc := node.Value.(*driverConn)
+	for i, dc := range db.freeConn {
 		if n := len(dc.openStmt); n > 0 {
 			// Just a sanity check. This is legal in
 			// general, but if we make the tests clean up
 			// their statements first, then we can safely
 			// verify this is always zero here, and any
 			// other value is a leak.
-			t.Errorf("while closing db, freeConn %d/%d had %d open stmts; want 0", i, db.freeConn.Len(), n)
+			t.Errorf("while closing db, freeConn %d/%d had %d open stmts; want 0", i, len(db.freeConn), n)
 		}
 	}
 	err := db.Close()
@@ -105,10 +111,10 @@ func closeDB(t testing.TB, db *DB) {
 // numPrepares assumes that db has exactly 1 idle conn and returns
 // its count of calls to Prepare
 func numPrepares(t *testing.T, db *DB) int {
-	if n := db.freeConn.Len(); n != 1 {
+	if n := len(db.freeConn); n != 1 {
 		t.Fatalf("free conns = %d; want 1", n)
 	}
-	return (db.freeConn.Front().Value.(*driverConn)).ci.(*fakeConn).numPrepare
+	return db.freeConn[0].ci.(*fakeConn).numPrepare
 }
 
 func (db *DB) numDeps() int {
@@ -133,7 +139,7 @@ func (db *DB) numDepsPollUntil(want int, d time.Duration) int {
 func (db *DB) numFreeConns() int {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.freeConn.Len()
+	return len(db.freeConn)
 }
 
 func (db *DB) dumpDeps(t *testing.T) {
@@ -435,6 +441,33 @@ func TestExec(t *testing.T) {
 	}
 }
 
+func TestTxPrepare(t *testing.T) {
+	db := newTestDB(t, "")
+	defer closeDB(t, db)
+	exec(t, db, "CREATE|t1|name=string,age=int32,dead=bool")
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin = %v", err)
+	}
+	stmt, err := tx.Prepare("INSERT|t1|name=?,age=?")
+	if err != nil {
+		t.Fatalf("Stmt, err = %v, %v", stmt, err)
+	}
+	defer stmt.Close()
+	_, err = stmt.Exec("Bobby", 7)
+	if err != nil {
+		t.Fatalf("Exec = %v", err)
+	}
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit = %v", err)
+	}
+	// Commit() should have closed the statement
+	if !stmt.closed {
+		t.Fatal("Stmt not closed after Commit")
+	}
+}
+
 func TestTxStmt(t *testing.T) {
 	db := newTestDB(t, "")
 	defer closeDB(t, db)
@@ -458,9 +491,13 @@ func TestTxStmt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit = %v", err)
 	}
+	// Commit() should have closed the statement
+	if !txs.closed {
+		t.Fatal("Stmt not closed after Commit")
+	}
 }
 
-// Issue: http://golang.org/issue/2784
+// Issue: https://golang.org/issue/2784
 // This test didn't fail before because we got lucky with the fakedb driver.
 // It was failing, and now not, in github.com/bradfitz/go-sql-test
 func TestTxQuery(t *testing.T) {
@@ -650,10 +687,10 @@ func TestQueryRowClosingStmt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if db.freeConn.Len() != 1 {
+	if len(db.freeConn) != 1 {
 		t.Fatalf("expected 1 free conn")
 	}
-	fakeConn := (db.freeConn.Front().Value.(*driverConn)).ci.(*fakeConn)
+	fakeConn := db.freeConn[0].ci.(*fakeConn)
 	if made, closed := fakeConn.stmtsMade, fakeConn.stmtsClosed; made != closed {
 		t.Errorf("statement close mismatch: made %d, closed %d", made, closed)
 	}
@@ -878,13 +915,13 @@ func TestMaxIdleConns(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx.Commit()
-	if got := db.freeConn.Len(); got != 1 {
+	if got := len(db.freeConn); got != 1 {
 		t.Errorf("freeConns = %d; want 1", got)
 	}
 
 	db.SetMaxIdleConns(0)
 
-	if got := db.freeConn.Len(); got != 0 {
+	if got := len(db.freeConn); got != 0 {
 		t.Errorf("freeConns after set to zero = %d; want 0", got)
 	}
 
@@ -893,7 +930,7 @@ func TestMaxIdleConns(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx.Commit()
-	if got := db.freeConn.Len(); got != 0 {
+	if got := len(db.freeConn); got != 0 {
 		t.Errorf("freeConns = %d; want 0", got)
 	}
 }
@@ -1033,6 +1070,57 @@ func TestMaxOpenConns(t *testing.T) {
 	}
 }
 
+// Issue 9453: tests that SetMaxOpenConns can be lowered at runtime
+// and affects the subsequent release of connections.
+func TestMaxOpenConnsOnBusy(t *testing.T) {
+	defer setHookpostCloseConn(nil)
+	setHookpostCloseConn(func(_ *fakeConn, err error) {
+		if err != nil {
+			t.Errorf("Error closing fakeConn: %v", err)
+		}
+	})
+
+	db := newTestDB(t, "magicquery")
+	defer closeDB(t, db)
+
+	db.SetMaxOpenConns(3)
+
+	conn0, err := db.conn(cachedOrNewConn)
+	if err != nil {
+		t.Fatalf("db open conn fail: %v", err)
+	}
+
+	conn1, err := db.conn(cachedOrNewConn)
+	if err != nil {
+		t.Fatalf("db open conn fail: %v", err)
+	}
+
+	conn2, err := db.conn(cachedOrNewConn)
+	if err != nil {
+		t.Fatalf("db open conn fail: %v", err)
+	}
+
+	if g, w := db.numOpen, 3; g != w {
+		t.Errorf("free conns = %d; want %d", g, w)
+	}
+
+	db.SetMaxOpenConns(2)
+	if g, w := db.numOpen, 3; g != w {
+		t.Errorf("free conns = %d; want %d", g, w)
+	}
+
+	conn0.releaseConn(nil)
+	conn1.releaseConn(nil)
+	if g, w := db.numOpen, 2; g != w {
+		t.Errorf("free conns = %d; want %d", g, w)
+	}
+
+	conn2.releaseConn(nil)
+	if g, w := db.numOpen, 2; g != w {
+		t.Errorf("free conns = %d; want %d", g, w)
+	}
+}
+
 func TestSingleOpenConn(t *testing.T) {
 	db := newTestDB(t, "people")
 	defer closeDB(t, db)
@@ -1053,6 +1141,26 @@ func TestSingleOpenConn(t *testing.T) {
 	}
 	if err = rows.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStats(t *testing.T) {
+	db := newTestDB(t, "people")
+	stats := db.Stats()
+	if got := stats.OpenConnections; got != 1 {
+		t.Errorf("stats.OpenConnections = %d; want 1", got)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	closeDB(t, db)
+	stats = db.Stats()
+	if got := stats.OpenConnections; got != 0 {
+		t.Errorf("stats.OpenConnections = %d; want 0", got)
 	}
 }
 
@@ -1180,10 +1288,10 @@ func TestCloseConnBeforeStmts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if db.freeConn.Len() != 1 {
-		t.Fatalf("expected 1 freeConn; got %d", db.freeConn.Len())
+	if len(db.freeConn) != 1 {
+		t.Fatalf("expected 1 freeConn; got %d", len(db.freeConn))
 	}
-	dc := db.freeConn.Front().Value.(*driverConn)
+	dc := db.freeConn[0]
 	if dc.closed {
 		t.Errorf("conn shouldn't be closed")
 	}
@@ -1277,7 +1385,80 @@ func TestStmtCloseOrder(t *testing.T) {
 	}
 }
 
-// golang.org/issue/5781
+// Test cases where there's more than maxBadConnRetries bad connections in the
+// pool (issue 8834)
+func TestManyErrBadConn(t *testing.T) {
+	manyErrBadConnSetup := func() *DB {
+		db := newTestDB(t, "people")
+
+		nconn := maxBadConnRetries + 1
+		db.SetMaxIdleConns(nconn)
+		db.SetMaxOpenConns(nconn)
+		// open enough connections
+		func() {
+			for i := 0; i < nconn; i++ {
+				rows, err := db.Query("SELECT|people|age,name|")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+			}
+		}()
+
+		if db.numOpen != nconn {
+			t.Fatalf("unexpected numOpen %d (was expecting %d)", db.numOpen, nconn)
+		} else if len(db.freeConn) != nconn {
+			t.Fatalf("unexpected len(db.freeConn) %d (was expecting %d)", len(db.freeConn), nconn)
+		}
+		for _, conn := range db.freeConn {
+			conn.ci.(*fakeConn).stickyBad = true
+		}
+		return db
+	}
+
+	// Query
+	db := manyErrBadConnSetup()
+	defer closeDB(t, db)
+	rows, err := db.Query("SELECT|people|age,name|")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exec
+	db = manyErrBadConnSetup()
+	defer closeDB(t, db)
+	_, err = db.Exec("INSERT|people|name=Julia,age=19")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Begin
+	db = manyErrBadConnSetup()
+	defer closeDB(t, db)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prepare
+	db = manyErrBadConnSetup()
+	defer closeDB(t, db)
+	stmt, err := db.Prepare("SELECT|people|age,name|")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = stmt.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// golang.org/issue/5718
 func TestErrBadConnReconnect(t *testing.T) {
 	db := newTestDB(t, "foo")
 	defer closeDB(t, db)
@@ -1342,6 +1523,11 @@ func TestErrBadConnReconnect(t *testing.T) {
 		return nil
 	})
 
+	// Provide a way to force a re-prepare of a statement on next execution
+	forcePrepare := func(stmt *Stmt) {
+		stmt.css = nil
+	}
+
 	// stmt.Exec
 	stmt1, err := db.Prepare("INSERT|t1|name=?,age=?,dead=?")
 	if err != nil {
@@ -1349,9 +1535,7 @@ func TestErrBadConnReconnect(t *testing.T) {
 	}
 	defer stmt1.Close()
 	// make sure we must prepare the stmt first
-	for _, cs := range stmt1.css {
-		cs.dc.inUse = true
-	}
+	forcePrepare(stmt1)
 
 	stmtExec := func() error {
 		_, err := stmt1.Exec("Gopher", 3, false)
@@ -1367,9 +1551,7 @@ func TestErrBadConnReconnect(t *testing.T) {
 	}
 	defer stmt2.Close()
 	// make sure we must prepare the stmt first
-	for _, cs := range stmt2.css {
-		cs.dc.inUse = true
-	}
+	forcePrepare(stmt2)
 
 	stmtQuery := func() error {
 		rows, err := stmt2.Query()
@@ -1708,62 +1890,12 @@ func doConcurrentTest(t testing.TB, ct concurrentTest) {
 
 	for i := 0; i < maxProcs*2; i++ {
 		go func() {
-			for _ = range reqs {
+			for range reqs {
 				err := ct.test(t)
 				if err != nil {
 					wg.Done()
 					continue
 				}
-				wg.Done()
-			}
-		}()
-	}
-
-	for i := 0; i < numReqs; i++ {
-		reqs <- true
-	}
-
-	wg.Wait()
-}
-
-func manyConcurrentQueries(t testing.TB) {
-	maxProcs, numReqs := 16, 500
-	if testing.Short() {
-		maxProcs, numReqs = 4, 50
-	}
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(maxProcs))
-
-	db := newTestDB(t, "people")
-	defer closeDB(t, db)
-
-	stmt, err := db.Prepare("SELECT|people|name|")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stmt.Close()
-
-	var wg sync.WaitGroup
-	wg.Add(numReqs)
-
-	reqs := make(chan bool)
-	defer close(reqs)
-
-	for i := 0; i < maxProcs*2; i++ {
-		go func() {
-			for _ = range reqs {
-				rows, err := stmt.Query()
-				if err != nil {
-					t.Errorf("error on query:  %v", err)
-					wg.Done()
-					continue
-				}
-
-				var name string
-				for rows.Next() {
-					rows.Scan(&name)
-				}
-				rows.Close()
-
 				wg.Done()
 			}
 		}()
@@ -1946,4 +2078,32 @@ func BenchmarkConcurrentRandom(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		doConcurrentTest(b, ct)
 	}
+}
+
+func BenchmarkManyConcurrentQueries(b *testing.B) {
+	b.ReportAllocs()
+	// To see lock contention in Go 1.4, 16~ cores and 128~ goroutines are required.
+	const parallelism = 16
+
+	db := newTestDB(b, "magicquery")
+	defer closeDB(b, db)
+	db.SetMaxIdleConns(runtime.GOMAXPROCS(0) * parallelism)
+
+	stmt, err := db.Prepare("SELECT|magicquery|op|op=?,millis=?")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer stmt.Close()
+
+	b.SetParallelism(parallelism)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			rows, err := stmt.Query("sleep", 1)
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			rows.Close()
+		}
+	})
 }

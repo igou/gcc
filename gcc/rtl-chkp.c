@@ -1,5 +1,5 @@
 /* RTL manipulation functions exported by Pointer Bounds Checker.
-   Copyright (C) 2014 Free Software Foundation, Inc.
+   Copyright (C) 2014-2015 Free Software Foundation, Inc.
    Contributed by Ilya Enkovich (ilya.enkovich@intel.com)
 
 This file is part of GCC.
@@ -21,20 +21,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "expr.h"
+#include "backend.h"
 #include "target.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "is-a.h"
-#include "predict.h"
-#include "basic-block.h"
+#include "rtl.h"
 #include "tree.h"
-#include "gimple-expr.h"
-#include "gimple.h"
-#include "bitmap.h"
+#include "emit-rtl.h"
+#include "expr.h"
 #include "rtl-chkp.h"
 #include "tree-chkp.h"
-#include "hash-map.h"
 
 static hash_map<tree, rtx> *chkp_rtx_bounds_map;
 

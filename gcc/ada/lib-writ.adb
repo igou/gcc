@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -81,7 +81,7 @@ package body Lib.Writ is
          Cunit_Entity      => Empty,
          Dependency_Num    => 0,
          Dynamic_Elab      => False,
-         Fatal_Error       => False,
+         Fatal_Error       => None,
          Generate_Code     => False,
          Has_RACW          => False,
          Filler            => False,
@@ -139,7 +139,7 @@ package body Lib.Writ is
         Cunit_Entity      => Empty,
         Dependency_Num    => 0,
         Dynamic_Elab      => False,
-        Fatal_Error       => False,
+        Fatal_Error       => None,
         Generate_Code     => False,
         Has_RACW          => False,
         Filler            => False,
@@ -454,16 +454,7 @@ package body Lib.Writ is
                      not Has_No_Elaboration_Code
                            (Parent (Declaration_Node (Body_Entity (Uent))))))
          then
-            if Convention (Uent) = Convention_CIL then
-
-               --  Special case for generic CIL packages which never have
-               --  elaboration code
-
-               Write_Info_Str (" NE");
-
-            else
-               Write_Info_Str (" EE");
-            end if;
+            Write_Info_Str (" EE");
          end if;
 
          if Has_No_Elaboration_Code (Unode) then
@@ -497,6 +488,10 @@ package body Lib.Writ is
 
          if Is_Remote_Types (Uent) then
             Write_Info_Str (" RT");
+         end if;
+
+         if Serious_Errors_Detected /= 0 then
+            Write_Info_Str (" SE");
          end if;
 
          if Is_Shared_Passive (Uent) then
@@ -1494,6 +1489,7 @@ package body Lib.Writ is
       --  Output SCO information if present
 
       if Generate_SCO then
+         SCO_Record_Filtered;
          SCO_Output;
       end if;
 

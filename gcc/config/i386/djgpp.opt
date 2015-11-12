@@ -1,6 +1,6 @@
 ; DJGPP-specific options.
 
-; Copyright (C) 2005-2014 Free Software Foundation, Inc.
+; Copyright (C) 2005-2015 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -22,7 +22,7 @@
 ;; weak symbols, and .gnu.linkonce support.
 mbnu210
 Target Var(TARGET_BNU210)
-Ignored (obsolete)
+Ignored (obsolete).
 
 posix
 Driver

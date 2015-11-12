@@ -1,5 +1,5 @@
 ;; Constraint definitions for RS6000
-;; Copyright (C) 2006-2014 Free Software Foundation, Inc.
+;; Copyright (C) 2006-2015 Free Software Foundation, Inc.
 ;;
 ;; This file is part of GCC.
 ;;
@@ -17,7 +17,7 @@
 ;; along with GCC; see the file COPYING3.  If not see
 ;; <http://www.gnu.org/licenses/>.
 
-;; Available constraint letters: "e", "k", "q", "u", "A", "B", "C", "D"
+;; Available constraint letters: e k q t u A B C D S T
 
 ;; Register constraints
 
@@ -56,11 +56,15 @@
 (define_register_constraint "wa" "rs6000_constraints[RS6000_CONSTRAINT_wa]"
   "Any VSX register if the -mvsx option was used or NO_REGS.")
 
+;; wb is not currently used
+
 ;; NOTE: For compatibility, "wc" is reserved to represent individual CR bits.
 ;; It is currently used for that purpose in LLVM.
 
 (define_register_constraint "wd" "rs6000_constraints[RS6000_CONSTRAINT_wd]"
   "VSX vector register to hold vector double data or NO_REGS.")
+
+;; we is not currently used
 
 (define_register_constraint "wf" "rs6000_constraints[RS6000_CONSTRAINT_wf]"
   "VSX vector register to hold vector float data or NO_REGS.")
@@ -93,6 +97,14 @@
 ;; There is a mode_attr that resolves to wm for SDmode and wn for SFmode
 (define_register_constraint "wn" "NO_REGS" "No register (NO_REGS).")
 
+;; wo is not currently used
+
+(define_register_constraint "wp" "rs6000_constraints[RS6000_CONSTRAINT_wp]"
+  "VSX register to use for IEEE 128-bit fp TFmode, or NO_REGS.")
+
+(define_register_constraint "wq" "rs6000_constraints[RS6000_CONSTRAINT_wq]"
+  "VSX register to use for IEEE 128-bit fp KFmode, or NO_REGS.")
+
 (define_register_constraint "wr" "rs6000_constraints[RS6000_CONSTRAINT_wr]"
   "General purpose register if 64-bit instructions are enabled or NO_REGS.")
 
@@ -124,6 +136,16 @@
   "Int constant that is the element number of the 64-bit scalar in a vector."
   (and (match_code "const_int")
        (match_test "TARGET_VSX && (ival == VECTOR_ELEMENT_SCALAR_64BIT)")))
+
+;; Extended fusion store
+(define_memory_constraint "wF"
+  "Memory operand suitable for power9 fusion load/stores"
+  (match_operand 0 "fusion_addis_mem_combo_load"))
+
+;; Fusion gpr load.
+(define_memory_constraint "wG"
+  "Memory operand suitable for TOC fusion memory references"
+  (match_operand 0 "toc_fusion_mem_wrapped"))
 
 ;; Lq/stq validates the address for load/store quad
 (define_memory_constraint "wQ"
@@ -211,7 +233,7 @@ to use @samp{m} or @samp{es} in @code{asm} statements)"
 (define_memory_constraint "Y"
   "memory operand for 8 byte and 16 byte gpr load/store"
   (and (match_code "mem")
-       (match_operand 0 "mem_operand_gpr")))
+       (match_test "mem_operand_gpr (op, mode)")))
 
 (define_memory_constraint "Z"
   "Memory operand that is an indexed or indirect from a register (it is
@@ -230,28 +252,10 @@ usually better to use @samp{m} or @samp{es} in @code{asm} statements)"
 
 ;; General constraints
 
-(define_constraint "S"
-  "Constant that can be placed into a 64-bit mask operand"
-  (and (match_test "TARGET_POWERPC64")
-       (match_operand 0 "mask64_operand")))
-
-(define_constraint "T"
-  "Constant that can be placed into a 32-bit mask operand"
-  (match_operand 0 "mask_operand"))
-
 (define_constraint "U"
   "V.4 small data reference"
   (and (match_test "DEFAULT_ABI == ABI_V4")
-       (match_operand 0 "small_data_operand")))
-
-(define_constraint "t"
-  "AND masks that can be performed by two rldic{l,r} insns
-   (but excluding those that could match other constraints of anddi3)"
-  (and (and (and (match_operand 0 "mask64_2_operand")
-		 (match_test "(fixed_regs[CR0_REGNO]
-			      || !logical_operand (op, DImode))"))
-	    (not (match_operand 0 "mask_operand")))
-       (not (match_operand 0 "mask64_operand"))))
+       (match_test "small_data_operand (op, mode)")))
 
 (define_constraint "W"
   "vector constant that does not require memory"

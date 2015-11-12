@@ -1,6 +1,6 @@
 /* This file is part of the Intel(R) Cilk(TM) Plus support
    This file contains the CilkPlus Intrinsics
-   Copyright (C) 2013-2014 Free Software Foundation, Inc.
+   Copyright (C) 2013-2015 Free Software Foundation, Inc.
    Contributed by Balaji V. Iyer <balaji.v.iyer@intel.com>,
    Intel Corporation
 
@@ -23,14 +23,21 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "tm.h"
+#include "function.h"
+#include "rtl.h"
 #include "tree.h"
 #include "stringpool.h"
+#include "expmed.h"
+#include "optabs-query.h"
+#include "insn-config.h"
+#include "emit-rtl.h"
+#include "recog.h"
+#include "fold-const.h"
 #include "stor-layout.h"
 #include "langhooks.h"
+#include "explow.h"
 #include "expr.h"
-#include "insn-codes.h"
-#include "optabs.h"
-#include "recog.h"
 #include "tree-iterator.h"
 #include "gimplify.h"
 #include "cilk.h"
@@ -347,7 +354,7 @@ expand_builtin_cilk_pop_frame (tree exp)
 void
 expand_builtin_cilk_detach (tree exp)
 {
-  rtx insn;
+  rtx_insn *insn;
   tree fptr = get_frame_arg (exp);
 
   if (fptr == NULL_TREE)

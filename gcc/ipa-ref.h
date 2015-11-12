@@ -1,5 +1,5 @@
 /* IPA reference lists.
-   Copyright (C) 2010-2014 Free Software Foundation, Inc.
+   Copyright (C) 2010-2015 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -47,6 +47,9 @@ public:
      function.  */
   bool cannot_lead_to_return ();
 
+  /* Return true if refernece may be used in address compare.  */
+  bool address_matters_p ();
+
   /* Return reference list this reference is in.  */
   struct ipa_ref_list * referring_ref_list (void);
 
@@ -55,7 +58,7 @@ public:
 
   symtab_node *referring;
   symtab_node *referred;
-  gimple stmt;
+  gimple *stmt;
   unsigned int lto_stmt_uid;
   unsigned int referred_index;
   ENUM_BITFIELD (ipa_ref_use) use:3;

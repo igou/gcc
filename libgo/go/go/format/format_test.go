@@ -87,7 +87,15 @@ var tests = []string{
 	"\tx := 0\n\tgo f()\n\n\n",
 	"\n\t\t\n\n\tx := 0\n\tgo f()\n\n\n",
 	"\n\t\t\n\n\t\t\tx := 0\n\t\t\tgo f()\n\n\n",
-	"\n\t\t\n\n\t\t\tx := 0\n\t\t\tconst s = `\nfoo\n`\n\n\n", // no indentation inside raw strings
+	"\n\t\t\n\n\t\t\tx := 0\n\t\t\tconst s = `\nfoo\n`\n\n\n",     // no indentation added inside raw strings
+	"\n\t\t\n\n\t\t\tx := 0\n\t\t\tconst s = `\n\t\tfoo\n`\n\n\n", // no indentation removed inside raw strings
+
+	// comments
+	"i := 5 /* Comment */",         // Issue 5551.
+	"\ta()\n//line :1",             // Issue 11276.
+	"\t//xxx\n\ta()\n//line :2",    // Issue 11276.
+	"\ta() //line :1\n\tb()\n",     // Issue 11276.
+	"x := 0\n//line :1\n//line :2", // Issue 11276.
 
 	// erroneous programs
 	"ERROR1 + 2 +",

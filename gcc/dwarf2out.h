@@ -1,5 +1,5 @@
 /* dwarf2out.h - Various declarations for functions found in dwarf2out.c
-   Copyright (C) 1998-2014 Free Software Foundation, Inc.
+   Copyright (C) 1998-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -21,7 +21,6 @@ along with GCC; see the file COPYING3.  If not see
 #define GCC_DWARF2OUT_H 1
 
 #include "dwarf2.h"	/* ??? Remove this once only used by dwarf2foo.c.  */
-#include "wide-int.h"
 
 typedef struct die_struct *dw_die_ref;
 typedef const struct die_struct *const_dw_die_ref;
@@ -162,14 +161,14 @@ struct GTY(()) dw_vec_const {
   unsigned elt_size;
 };
 
-struct addr_table_entry_struct;
+struct addr_table_entry;
 
 /* The dw_val_node describes an attribute's value, as it is
    represented internally.  */
 
 struct GTY(()) dw_val_node {
   enum dw_val_class val_class;
-  struct addr_table_entry_struct * GTY(()) val_entry;
+  struct addr_table_entry * GTY(()) val_entry;
   union dw_val_struct_union
     {
       rtx GTY ((tag ("dw_val_class_addr"))) val_addr;
@@ -205,7 +204,7 @@ struct GTY(()) dw_val_node {
 /* Locations in memory are described using a sequence of stack machine
    operations.  */
 
-struct GTY(()) dw_loc_descr_node {
+struct GTY((chain_next ("%h.dw_loc_next"))) dw_loc_descr_node {
   dw_loc_descr_ref dw_loc_next;
   ENUM_BITFIELD (dwarf_location_atom) dw_loc_opc : 8;
   /* Used to distinguish DW_OP_addr with a direct symbol relocation
@@ -254,6 +253,7 @@ extern void dwarf2out_emit_cfi (dw_cfi_ref cfi);
 extern void debug_dwarf (void);
 struct die_struct;
 extern void debug_dwarf_die (struct die_struct *);
+extern void debug_dwarf_loc_descr (dw_loc_descr_ref);
 extern void debug (die_struct &ref);
 extern void debug (die_struct *ptr);
 extern void dwarf2out_set_demangle_name_func (const char *(*) (const char *));
@@ -261,9 +261,17 @@ extern void dwarf2out_set_demangle_name_func (const char *(*) (const char *));
 extern void dwarf2out_vms_debug_main_pointer (void);
 #endif
 
+enum array_descr_ordering
+{
+  array_descr_ordering_default,
+  array_descr_ordering_row_major,
+  array_descr_ordering_column_major
+};
+
 struct array_descr_info
 {
   int ndimensions;
+  enum array_descr_ordering ordering;
   tree element_type;
   tree base_decl;
   tree data_location;
@@ -271,6 +279,10 @@ struct array_descr_info
   tree associated;
   struct array_descr_dimen
     {
+      /* GCC uses sizetype for array indices, so lower_bound and upper_bound
+	 will likely be "sizetype" values. However, bounds may have another
+	 type in the original source code.  */
+      tree bounds_type;
       tree lower_bound;
       tree upper_bound;
       tree stride;

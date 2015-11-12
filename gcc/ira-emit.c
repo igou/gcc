@@ -1,5 +1,5 @@
 /* Integrated Register Allocator.  Changing code and generating moves.
-   Copyright (C) 2006-2014 Free Software Foundation, Inc.
+   Copyright (C) 2006-2015 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -68,33 +68,20 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "regs.h"
+#include "backend.h"
 #include "rtl.h"
-#include "tm_p.h"
-#include "target.h"
-#include "flags.h"
-#include "obstack.h"
-#include "bitmap.h"
-#include "hard-reg-set.h"
+#include "tree.h"
 #include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
+#include "df.h"
+#include "insn-config.h"
+#include "regs.h"
+#include "ira.h"
+#include "ira-int.h"
 #include "cfgrtl.h"
 #include "cfgbuild.h"
-#include "basic-block.h"
 #include "expr.h"
-#include "recog.h"
-#include "params.h"
 #include "reload.h"
-#include "df.h"
-#include "ira-int.h"
+#include "cfgloop.h"
 
 
 /* Data used to emit live range split insns and to flattening IR.  */

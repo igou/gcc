@@ -1,7 +1,7 @@
 /* This file is part of the Intel(R) Cilk(TM) Plus support
    This file contains routines to handle Array Notation expression
    handling routines in the C Compiler.
-   Copyright (C) 2013-2014 Free Software Foundation, Inc.
+   Copyright (C) 2013-2015 Free Software Foundation, Inc.
    Contributed by Balaji V. Iyer <balaji.v.iyer@intel.com>,
                   Intel Corporation.
 
@@ -68,12 +68,9 @@
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tree.h"
 #include "c-tree.h"
 #include "gimple-expr.h"
 #include "tree-iterator.h"
-#include "opts.h"
-#include "c-family/c-common.h"
 
 /* If *VALUE is not of type INTEGER_CST, PARM_DECL or VAR_DECL, then map it
    to a variable and then set *VALUE to the new variable.  */
@@ -84,7 +81,7 @@ make_triplet_val_inv (location_t loc, tree *value)
   tree var, new_exp;
   if (TREE_CODE (*value) != INTEGER_CST
       && TREE_CODE (*value) != PARM_DECL
-      && TREE_CODE (*value) != VAR_DECL)
+      && !VAR_P (*value))
     {
       var = build_decl (loc, VAR_DECL, NULL_TREE, integer_type_node);
       new_exp = build_modify_expr (loc, var, TREE_TYPE (var), NOP_EXPR, loc,
@@ -321,7 +318,7 @@ fix_builtin_array_notation_fn (tree an_builtin_fn, tree *new_var)
     array_ind_value = build_decl (location, VAR_DECL, NULL_TREE, 
 				  TREE_TYPE (func_parm));
   array_op0 = (*array_operand)[0];
-  if (TREE_CODE (array_op0) == INDIRECT_REF)
+  if (INDIRECT_REF_P (array_op0))
     array_op0 = TREE_OPERAND (array_op0, 0);
   switch (an_type)
     {

@@ -1,5 +1,5 @@
 /* Process source files and output type information.
-   Copyright (C) 2002-2014 Free Software Foundation, Inc.
+   Copyright (C) 2002-2015 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -27,7 +27,6 @@
 #include "errors.h"		/* for fatal */
 #include "getopt.h"
 #include "version.h"		/* for version_string & pkgversion_string.  */
-#include "hashtab.h"
 #include "xregex.h"
 #include "obstack.h"
 #include "gengtype.h"
@@ -119,23 +118,6 @@ error_at_line (const struct fileloc *pos, const char *msg, ...)
 
   va_end (ap);
 }
-
-/* asprintf, but produces fatal message on out-of-memory.  */
-char *
-xasprintf (const char *format, ...)
-{
-  int n;
-  char *result;
-  va_list ap;
-
-  va_start (ap, format);
-  n = vasprintf (&result, format, ap);
-  if (result == NULL || n < 0)
-    fatal ("out of memory");
-  va_end (ap);
-
-  return result;
-}
 
 /* Locate the ultimate base class of struct S.  */
 
@@ -176,9 +158,6 @@ size_t num_lang_dirs;
    BASE_FILES entry for each language.  */
 static outf_p *base_files;
 
-
-
-#if ENABLE_CHECKING
 /* Utility debugging function, printing the various type counts within
    a list of types.  Called through the DBGPRINT_COUNT_TYPE macro.  */
 void
@@ -240,7 +219,6 @@ dbgprint_count_type_at (const char *fil, int lin, const char *msg, type_p t)
     fprintf (stderr, "@@%%@@ %d undefined types\n", nb_undefined);
   fprintf (stderr, "\n");
 }
-#endif /* ENABLE_CHECKING */
 
 /* Scan the input file, LIST, and determine how much space we need to
    store strings in.  Also, count the number of language directories
@@ -628,7 +606,9 @@ create_user_defined_type (const char *type_name, struct fileloc *pos)
 	 comma-separated list of strings, implicitly assumed to
 	 be type names, potentially with "*" characters.  */
       char *arg = open_bracket + 1;
-      char *next;
+      /* Workaround -Wmaybe-uninitialized false positive during
+	 profiledbootstrap by initializing it.  */
+      char *next = NULL;
       char *type_id = strtoken (arg, ",>", &next);
       pair_p fields = 0;
       while (type_id)
@@ -1256,6 +1236,7 @@ adjust_field_rtx_def (type_p t, options_p ARG_UNUSED (opt))
 	    case 'i':
 	    case 'n':
 	    case 'w':
+	    case 'r':
 	      t = scalar_tp;
 	      subname = "rt_int";
 	      break;
@@ -1283,8 +1264,6 @@ adjust_field_rtx_def (type_p t, options_p ARG_UNUSED (opt))
 		t = scalar_tp, subname = "rt_int";
 	      else if (i == DEBUG_EXPR && aindex == 0)
 		t = tree_tp, subname = "rt_tree";
-	      else if (i == REG && aindex == 1)
-		t = reg_attrs_tp, subname = "rt_reg";
 	      else if (i == SYMBOL_REF && aindex == 1)
 		t = symbol_union_tp, subname = "";
 	      else if (i == JUMP_TABLE_DATA && aindex >= 4)
@@ -1358,6 +1337,9 @@ adjust_field_rtx_def (type_p t, options_p ARG_UNUSED (opt))
 	      create_string_option (subfields->opt, "desc",
 				    "CONSTANT_POOL_ADDRESS_P (&%0)");
 	}
+
+      if (i == REG)
+	subfields = create_field (subfields, reg_attrs_tp, "reg.attrs");
 
       if (i == SYMBOL_REF)
 	{
@@ -1625,7 +1607,7 @@ static outf_p
 create_file (const char *name, const char *oname)
 {
   static const char *const hdr[] = {
-    "   Copyright (C) 2004-2014 Free Software Foundation, Inc.\n",
+    "   Copyright (C) 2004-2015 Free Software Foundation, Inc.\n",
     "\n",
     "This file is part of GCC.\n",
     "\n",
@@ -1724,24 +1706,20 @@ open_base_files (void)
   {
     /* The order of files here matters very much.  */
     static const char *const ifiles[] = {
-      "config.h", "system.h", "coretypes.h", "tm.h", "insn-codes.h",
-      "hashtab.h", "splay-tree.h", "obstack.h", "bitmap.h", "input.h",
-      "tree.h", "rtl.h", "wide-int.h", "hashtab.h", "hash-set.h", "vec.h",
-      "machmode.h", "tm.h", "hard-reg-set.h", "input.h", "predict.h",
-      "function.h", "insn-config.h", "expr.h", "alloc-pool.h",
-      "hard-reg-set.h", "basic-block.h", "cselib.h", "insn-addr.h",
-      "optabs.h", "libfuncs.h", "debug.h", "ggc.h", 
-      "hash-table.h", "vec.h", "ggc.h", "dominance.h", "cfg.h", "basic-block.h",
-      "tree-ssa-alias.h", "internal-fn.h", "gimple-fold.h", "tree-eh.h",
-      "gimple-expr.h", "is-a.h",
-      "gimple.h", "gimple-iterator.h", "gimple-ssa.h", "tree-cfg.h",
+      "config.h", "system.h", "coretypes.h", "backend.h", "predict.h", "tree.h",
+      "rtl.h", "gimple.h", "fold-const.h", "insn-codes.h", "splay-tree.h",
+      "alias.h", "insn-config.h", "flags.h", "expmed.h", "dojump.h",
+      "explow.h", "calls.h", "emit-rtl.h", "varasm.h", "stmt.h",
+      "expr.h", "alloc-pool.h", "cselib.h", "insn-addr.h", "optabs.h",
+      "libfuncs.h", "debug.h", "internal-fn.h", "gimple-fold.h", "tree-eh.h",
+      "gimple-iterator.h", "gimple-ssa.h", "tree-cfg.h",
       "tree-phinodes.h", "ssa-iterators.h", "stringpool.h", "tree-ssanames.h",
       "tree-ssa-loop.h", "tree-ssa-loop-ivopts.h", "tree-ssa-loop-manip.h",
       "tree-ssa-loop-niter.h", "tree-into-ssa.h", "tree-dfa.h", 
       "tree-ssa.h", "reload.h", "cpp-id-data.h", "tree-chrec.h",
       "except.h", "output.h",  "cfgloop.h", "target.h", "lto-streamer.h",
-      "target-globals.h", "ipa-ref.h", "cgraph.h", "ipa-prop.h", 
-      "ipa-inline.h", "dwarf2out.h", "omp-low.h", NULL
+      "target-globals.h", "ipa-ref.h", "cgraph.h", "symbol-summary.h",
+      "ipa-prop.h", "ipa-inline.h", "dwarf2out.h", "omp-low.h", NULL
     };
     const char *const *ifp;
     outf_p gtype_desc_c;
@@ -4727,33 +4705,6 @@ write_roots (pair_p variables, bool emit_pch)
    this funcion will have to be adjusted to be more like
    output_mangled_typename.  */
 
-static void
-output_typename (outf_p of, const_type_p t)
-{
-  switch (t->kind)
-    {
-    case TYPE_STRING:
-      oprintf (of, "str");
-      break;
-    case TYPE_SCALAR:
-      oprintf (of, "scalar");
-      break;
-    case TYPE_POINTER:
-      output_typename (of, t->u.p);
-      break;
-    case TYPE_STRUCT:
-    case TYPE_USER_STRUCT:
-    case TYPE_UNION:
-    case TYPE_LANG_STRUCT:
-      oprintf (of, "%s", t->u.s.tag);
-      break;
-    case TYPE_NONE:
-    case TYPE_UNDEFINED:
-    case TYPE_ARRAY:
-      gcc_unreachable ();
-    }
-}
-
 #define INDENT 2
 
 /* Dumps the value of typekind KIND.  */
@@ -4923,10 +4874,17 @@ dump_type (int indent, type_p t)
 {
   PTR *slot;
 
+  printf ("%*cType at %p: ", indent, ' ', (void *) t);
+  if (t->kind == TYPE_UNDEFINED)
+    {
+      gcc_assert (t->gc_used == GC_UNUSED);
+      printf ("undefined.\n");
+      return;
+    }
+
   if (seen_types == NULL)
     seen_types = htab_create (100, htab_hash_pointer, htab_eq_pointer, NULL);
 
-  printf ("%*cType at %p: ", indent, ' ', (void *) t);
   slot = htab_find_slot (seen_types, t, INSERT);
   if (*slot != NULL)
     {
@@ -5226,7 +5184,6 @@ main (int argc, char **argv)
 
   parse_program_options (argc, argv);
 
-#if ENABLE_CHECKING
   if (do_debug)
     {
       time_t now = (time_t) 0;
@@ -5234,7 +5191,6 @@ main (int argc, char **argv)
       DBGPRINTF ("gengtype started pid %d at %s",
 		 (int) getpid (), ctime (&now));
     }
-#endif	/* ENABLE_CHECKING */
 
   /* Parse the input list and the input files.  */
   DBGPRINTF ("inputlist %s", inputlist);

@@ -18,7 +18,6 @@
 #include "arch.h"
 #include "defs.h"
 #include "malloc.h"
-#include "race.h"
 #include "go-type.h"
 #include "go-defer.h"
 
@@ -51,7 +50,7 @@ extern void __splitstack_block_signals_context (void *context[10], int *,
 #if defined(USING_SPLIT_STACK) && defined(LINKER_SUPPORTS_SPLIT_STACK)
 # define StackMin PTHREAD_STACK_MIN
 #else
-# define StackMin 2 * 1024 * 1024
+# define StackMin ((sizeof(char *) < 8) ? 2 * 1024 * 1024 : 4 * 1024 * 1024)
 #endif
 
 uintptr runtime_stacks_sys;
@@ -125,6 +124,30 @@ static inline void
 fixcontext(ucontext_t* c)
 {
 	c->uc_mcontext._mc_tlsbase = tlsbase;
+}
+
+# elif defined(__sparc__)
+
+static inline void
+initcontext(void)
+{
+}
+
+static inline void
+fixcontext(ucontext_t *c)
+{
+	/* ??? Using 
+	     register unsigned long thread __asm__("%g7");
+	     c->uc_mcontext.gregs[REG_G7] = thread;
+	   results in
+	     error: variable ‘thread’ might be clobbered by \
+		‘longjmp’ or ‘vfork’ [-Werror=clobbered]
+	   which ought to be false, as %g7 is a fixed register.  */
+
+	if (sizeof (c->uc_mcontext.gregs[REG_G7]) == 8)
+		asm ("stx %%g7, %0" : "=m"(c->uc_mcontext.gregs[REG_G7]));
+	else
+		asm ("st %%g7, %0" : "=m"(c->uc_mcontext.gregs[REG_G7]));
 }
 
 # else
@@ -349,7 +372,6 @@ enum
 Sched	runtime_sched;
 int32	runtime_gomaxprocs;
 uint32	runtime_needextram = 1;
-bool	runtime_iscgo = true;
 M	runtime_m0;
 G	runtime_g0;	// idle goroutine for m0
 G*	runtime_lastg;
@@ -365,6 +387,8 @@ static	Lock allglock;	// the following vars are protected by this lock or by sto
 G**	runtime_allg;
 uintptr runtime_allglen;
 static	uintptr allgcap;
+
+bool	runtime_isarchive;
 
 void* runtime_mstart(void*);
 static void runqput(P*, G*);
@@ -405,6 +429,8 @@ static bool preemptall(void);
 static bool exitsyscallfast(void);
 static void allgadd(G*);
 
+bool runtime_isstarted;
+
 // The bootstrap sequence is:
 //
 //	call osinit
@@ -417,6 +443,7 @@ void
 runtime_schedinit(void)
 {
 	int32 n, procs;
+	String s;
 	const byte *p;
 	Eface i;
 
@@ -451,8 +478,9 @@ runtime_schedinit(void)
 
 	runtime_sched.lastpoll = runtime_nanotime();
 	procs = 1;
-	p = runtime_getenv("GOMAXPROCS");
-	if(p != nil && (n = runtime_atoi(p)) > 0) {
+	s = runtime_getenv("GOMAXPROCS");
+	p = s.str;
+	if(p != nil && (n = runtime_atoi(p, s.len)) > 0) {
 		if(n > MaxGomaxprocs)
 			n = MaxGomaxprocs;
 		procs = n;
@@ -462,13 +490,66 @@ runtime_schedinit(void)
 
 	// Can not enable GC until all roots are registered.
 	// mstats.enablegc = 1;
-
-	// if(raceenabled)
-	//	g->racectx = runtime_raceinit();
 }
 
 extern void main_init(void) __asm__ (GOSYM_PREFIX "__go_init_main");
 extern void main_main(void) __asm__ (GOSYM_PREFIX "main.main");
+
+// Used to determine the field alignment.
+
+struct field_align
+{
+  char c;
+  Hchan *p;
+};
+
+// main_init_done is a signal used by cgocallbackg that initialization
+// has been completed.  It is made before _cgo_notify_runtime_init_done,
+// so all cgo calls can rely on it existing.  When main_init is
+// complete, it is closed, meaning cgocallbackg can reliably receive
+// from it.
+Hchan *runtime_main_init_done;
+
+// The chan bool type, for runtime_main_init_done.
+
+extern const struct __go_type_descriptor bool_type_descriptor
+  __asm__ (GOSYM_PREFIX "__go_tdn_bool");
+
+static struct __go_channel_type chan_bool_type_descriptor =
+  {
+    /* __common */
+    {
+      /* __code */
+      GO_CHAN,
+      /* __align */
+      __alignof (Hchan *),
+      /* __field_align */
+      offsetof (struct field_align, p) - 1,
+      /* __size */
+      sizeof (Hchan *),
+      /* __hash */
+      0, /* This value doesn't matter.  */
+      /* __hashfn */
+      &__go_type_hash_error_descriptor,
+      /* __equalfn */
+      &__go_type_equal_error_descriptor,
+      /* __gc */
+      NULL, /* This value doesn't matter */
+      /* __reflection */
+      NULL, /* This value doesn't matter */
+      /* __uncommon */
+      NULL,
+      /* __pointer_to_this */
+      NULL
+    },
+    /* __element_type */
+    &bool_type_descriptor,
+    /* __dir */
+    CHANNEL_BOTH_DIR
+  };
+
+extern Hchan *__go_new_channel (ChanType *, uintptr);
+extern void closechan(Hchan *) __asm__ (GOSYM_PREFIX "runtime.closechan");
 
 static void
 initDone(void *arg __attribute__ ((unused))) {
@@ -515,7 +596,14 @@ runtime_main(void* dummy __attribute__((unused)))
 	if(m != &runtime_m0)
 		runtime_throw("runtime_main not on m0");
 	__go_go(runtime_MHeap_Scavenger, nil);
+
+	runtime_main_init_done = __go_new_channel(&chan_bool_type_descriptor, 0);
+
+	_cgo_notify_runtime_init_done();
+
 	main_init();
+
+	closechan(runtime_main_init_done);
 
 	if(g->defer != &d || d.__pfn != initDone)
 		runtime_throw("runtime: bad defer entry after init");
@@ -527,9 +615,15 @@ runtime_main(void* dummy __attribute__((unused)))
 	// roots.
 	mstats.enablegc = 1;
 
+	if(runtime_isarchive) {
+		// This is not a complete program, but is instead a
+		// library built using -buildmode=c-archive or
+		// c-shared.  Now that we are initialized, there is
+		// nothing further to do.
+		return;
+	}
+
 	main_main();
-	if(raceenabled)
-		runtime_racefini();
 
 	// Make racy client program work: if panicking on
 	// another goroutine at the same time as main returns,
@@ -993,8 +1087,14 @@ runtime_mstart(void* mp)
 
 	// Install signal handlers; after minit so that minit can
 	// prepare the thread to be able to handle the signals.
-	if(m == &runtime_m0)
+	if(m == &runtime_m0) {
+		if(runtime_iscgo && !runtime_cgoHasExtraM) {
+			runtime_cgoHasExtraM = true;
+			runtime_newextram();
+			runtime_needextram = 0;
+		}
 		runtime_initsig();
+	}
 	
 	if(m->mstartfn)
 		m->mstartfn();
@@ -1848,8 +1948,6 @@ runtime_goexit(void)
 {
 	if(g->status != Grunning)
 		runtime_throw("bad g status");
-	if(raceenabled)
-		runtime_racegoend();
 	runtime_mcall(goexit0);
 }
 
@@ -2152,11 +2250,24 @@ runtime_malg(int32 stacksize, byte** ret_stack, size_t* ret_stacksize)
 		__splitstack_block_signals_context(&newg->stack_context[0],
 						   &dont_block_signals, nil);
 #else
-		*ret_stack = runtime_mallocgc(stacksize, 0, FlagNoProfiling|FlagNoGC);
+                // In 64-bit mode, the maximum Go allocation space is
+                // 128G.  Our stack size is 4M, which only permits 32K
+                // goroutines.  In order to not limit ourselves,
+                // allocate the stacks out of separate memory.  In
+                // 32-bit mode, the Go allocation space is all of
+                // memory anyhow.
+		if(sizeof(void*) == 8) {
+			void *p = runtime_SysAlloc(stacksize, &mstats.other_sys);
+			if(p == nil)
+				runtime_throw("runtime: cannot allocate memory for goroutine stack");
+			*ret_stack = (byte*)p;
+		} else {
+			*ret_stack = runtime_mallocgc(stacksize, 0, FlagNoProfiling|FlagNoGC);
+			runtime_xadd(&runtime_stacks_sys, stacksize);
+		}
 		*ret_stacksize = stacksize;
 		newg->gcinitial_sp = *ret_stack;
 		newg->gcstack_size = stacksize;
-		runtime_xadd(&runtime_stacks_sys, stacksize);
 #endif
 	}
 	return newg;
@@ -2172,19 +2283,19 @@ runtime_malg(int32 stacksize, byte** ret_stack, size_t* ret_stacksize)
 // are available sequentially after &fn; they would not be
 // copied if a stack split occurred.  It's OK for this to call
 // functions that split the stack.
-void runtime_testing_entersyscall(void)
+void runtime_testing_entersyscall(int32)
   __asm__ (GOSYM_PREFIX "runtime.entersyscall");
 void
-runtime_testing_entersyscall()
+runtime_testing_entersyscall(int32 dummy __attribute__ ((unused)))
 {
 	runtime_entersyscall();
 }
 
-void runtime_testing_exitsyscall(void)
+void runtime_testing_exitsyscall(int32)
   __asm__ (GOSYM_PREFIX "runtime.exitsyscall");
 
 void
-runtime_testing_exitsyscall()
+runtime_testing_exitsyscall(int32 dummy __attribute__ ((unused)))
 {
 	runtime_exitsyscall();
 }
@@ -2730,6 +2841,13 @@ checkdead(void)
 	G *gp;
 	int32 run, grunning, s;
 	uintptr i;
+
+	// For -buildmode=c-shared or -buildmode=c-archive it's OK if
+	// there are no running goroutines.  The calling program is
+	// assumed to be running.
+	if(runtime_isarchive) {
+		return;
+	}
 
 	// -1 for sysmon
 	run = runtime_sched.mcount - runtime_sched.nmidle - runtime_sched.nmidlelocked - 1 - countextra();
@@ -3316,26 +3434,7 @@ void
 runtime_proc_scan(struct Workbuf** wbufp, void (*enqueue1)(struct Workbuf**, Obj))
 {
 	enqueue1(wbufp, (Obj){(byte*)&runtime_sched, sizeof runtime_sched, 0});
-}
-
-// When a function calls a closure, it passes the closure value to
-// __go_set_closure immediately before the function call.  When a
-// function uses a closure, it calls __go_get_closure immediately on
-// function entry.  This is a hack, but it will work on any system.
-// It would be better to use the static chain register when there is
-// one.  It is also worth considering expanding these functions
-// directly in the compiler.
-
-void
-__go_set_closure(void* v)
-{
-	g->closure = v;
-}
-
-void *
-__go_get_closure(void)
-{
-	return g->closure;
+	enqueue1(wbufp, (Obj){(byte*)&runtime_main_init_done, sizeof runtime_main_init_done, 0});
 }
 
 // Return whether we are waiting for a GC.  This gc toolchain uses
@@ -3344,4 +3443,55 @@ bool
 runtime_gcwaiting(void)
 {
 	return runtime_sched.gcwaiting;
+}
+
+// os_beforeExit is called from os.Exit(0).
+//go:linkname os_beforeExit os.runtime_beforeExit
+
+extern void os_beforeExit() __asm__ (GOSYM_PREFIX "os.runtime_beforeExit");
+
+void
+os_beforeExit()
+{
+}
+
+// Active spinning for sync.Mutex.
+//go:linkname sync_runtime_canSpin sync.runtime_canSpin
+
+enum
+{
+	ACTIVE_SPIN = 4,
+	ACTIVE_SPIN_CNT = 30,
+};
+
+extern _Bool sync_runtime_canSpin(intgo i)
+  __asm__ (GOSYM_PREFIX "sync.runtime_canSpin");
+
+_Bool
+sync_runtime_canSpin(intgo i)
+{
+	P *p;
+
+	// sync.Mutex is cooperative, so we are conservative with spinning.
+	// Spin only few times and only if running on a multicore machine and
+	// GOMAXPROCS>1 and there is at least one other running P and local runq is empty.
+	// As opposed to runtime mutex we don't do passive spinning here,
+	// because there can be work on global runq on on other Ps.
+	if (i >= ACTIVE_SPIN || runtime_ncpu <= 1 || runtime_gomaxprocs <= (int32)(runtime_sched.npidle+runtime_sched.nmspinning)+1) {
+		return false;
+	}
+	p = m->p;
+	return p != nil && p->runqhead == p->runqtail;
+}
+
+//go:linkname sync_runtime_doSpin sync.runtime_doSpin
+//go:nosplit
+
+extern void sync_runtime_doSpin(void)
+  __asm__ (GOSYM_PREFIX "sync.runtime_doSpin");
+
+void
+sync_runtime_doSpin()
+{
+	runtime_procyield(ACTIVE_SPIN_CNT);
 }

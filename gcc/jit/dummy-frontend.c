@@ -1,5 +1,5 @@
 /* jit.c -- Dummy "frontend" for use during JIT-compilation.
-   Copyright (C) 2013-2014 Free Software Foundation, Inc.
+   Copyright (C) 2013-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,30 +20,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "opts.h"
-#include "signop.h"
-#include "tree-core.h"
+#include "jit-playback.h"
 #include "stor-layout.h"
-#include "tree.h"
 #include "debug.h"
 #include "langhooks.h"
 #include "langhooks-def.h"
-#include "hash-map.h"
-#include "is-a.h"
-#include "plugin-api.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "tm.h"
-#include "hard-reg-set.h"
-#include "function.h"
-#include "ipa-ref.h"
-#include "dumpfile.h"
-#include "cgraph.h"
 
-#include "jit-common.h"
-#include "jit-playback.h"
 
 #include <mpfr.h>
 
@@ -113,6 +95,9 @@ struct ggc_root_tab jit_root_tab[] =
 static bool
 jit_langhook_init (void)
 {
+  gcc_assert (gcc::jit::active_playback_ctxt);
+  JIT_LOG_SCOPE (gcc::jit::active_playback_ctxt->get_logger ());
+
   static bool registered_root_tab = false;
   if (!registered_root_tab)
     {
@@ -152,11 +137,25 @@ jit_langhook_type_for_mode (enum machine_mode mode, int unsignedp)
   if (mode == TYPE_MODE (double_type_node))
     return double_type_node;
 
+  if (mode == TYPE_MODE (intQI_type_node))
+    return unsignedp ? unsigned_intQI_type_node : intQI_type_node;
+  if (mode == TYPE_MODE (intHI_type_node))
+    return unsignedp ? unsigned_intHI_type_node : intHI_type_node;
+  if (mode == TYPE_MODE (intSI_type_node))
+    return unsignedp ? unsigned_intSI_type_node : intSI_type_node;
+  if (mode == TYPE_MODE (intDI_type_node))
+    return unsignedp ? unsigned_intDI_type_node : intDI_type_node;
+  if (mode == TYPE_MODE (intTI_type_node))
+    return unsignedp ? unsigned_intTI_type_node : intTI_type_node;
+
   if (mode == TYPE_MODE (integer_type_node))
     return unsignedp ? unsigned_type_node : integer_type_node;
 
   if (mode == TYPE_MODE (long_integer_type_node))
     return unsignedp ? long_unsigned_type_node : long_integer_type_node;
+
+  if (mode == TYPE_MODE (long_long_integer_type_node))
+    return unsignedp ? long_long_unsigned_type_node : long_long_integer_type_node;
 
   if (COMPLEX_MODE_P (mode))
     {
@@ -209,13 +208,6 @@ jit_langhook_getdecls (void)
   return NULL;
 }
 
-static void
-jit_langhook_write_globals (void)
-{
-  /* This is the hook that runs the middle and backends: */
-  symtab->finalize_compilation_unit ();
-}
-
 #undef LANG_HOOKS_NAME
 #define LANG_HOOKS_NAME		"libgccjit"
 
@@ -242,9 +234,6 @@ jit_langhook_write_globals (void)
 
 #undef LANG_HOOKS_GETDECLS
 #define LANG_HOOKS_GETDECLS		jit_langhook_getdecls
-
-#undef LANG_HOOKS_WRITE_GLOBALS
-#define LANG_HOOKS_WRITE_GLOBALS	jit_langhook_write_globals
 
 struct lang_hooks lang_hooks = LANG_HOOKS_INITIALIZER;
 

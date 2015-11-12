@@ -1,5 +1,5 @@
 /* Driver of optimization process
-   Copyright (C) 2003-2014 Free Software Foundation, Inc.
+   Copyright (C) 2003-2015 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -160,71 +160,49 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
+#include "target.h"
+#include "rtl.h"
 #include "tree.h"
+#include "gimple.h"
+#include "cfghooks.h"
+#include "regset.h"     /* FIXME: For reg_obstack.  */
+#include "alloc-pool.h"
+#include "tree-pass.h"
+#include "stringpool.h"
+#include "gimple-ssa.h"
+#include "cgraph.h"
+#include "coverage.h"
+#include "lto-streamer.h"
+#include "fold-const.h"
 #include "varasm.h"
 #include "stor-layout.h"
-#include "stringpool.h"
 #include "output.h"
-#include "rtl.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "basic-block.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
+#include "cfgcleanup.h"
 #include "gimple-fold.h"
-#include "gimple-expr.h"
-#include "is-a.h"
-#include "gimple.h"
 #include "gimplify.h"
 #include "gimple-iterator.h"
 #include "gimplify-me.h"
-#include "gimple-ssa.h"
 #include "tree-cfg.h"
 #include "tree-into-ssa.h"
 #include "tree-ssa.h"
-#include "tree-inline.h"
 #include "langhooks.h"
 #include "toplev.h"
-#include "flags.h"
 #include "debug.h"
-#include "target.h"
-#include "diagnostic.h"
-#include "params.h"
-#include "intl.h"
-#include "hash-map.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
-#include "alloc-pool.h"
+#include "symbol-summary.h"
 #include "ipa-prop.h"
-#include "tree-iterator.h"
-#include "tree-pass.h"
-#include "tree-dump.h"
 #include "gimple-pretty-print.h"
-#include "output.h"
-#include "coverage.h"
 #include "plugin.h"
 #include "ipa-inline.h"
 #include "ipa-utils.h"
-#include "lto-streamer.h"
 #include "except.h"
 #include "cfgloop.h"
-#include "regset.h"     /* FIXME: For reg_obstack.  */
 #include "context.h"
 #include "pass_manager.h"
 #include "tree-nested.h"
-#include "gimplify.h"
 #include "dbgcnt.h"
 #include "tree-chkp.h"
 #include "lto-section-names.h"
-#include "omp-low.h"
 
 /* Queue of cgraph nodes scheduled to be added into cgraph.  This is a
    secondary queue used during optimization to accommodate passes that
@@ -263,7 +241,7 @@ symtab_node::needed_p (void)
   if (forced_by_abi && TREE_PUBLIC (decl))
     return true;
 
- /* Keep constructors, destructors and virtual functions.  */
+  /* Keep constructors, destructors and virtual functions.  */
    if (TREE_CODE (decl) == FUNCTION_DECL
        && (DECL_STATIC_CONSTRUCTOR (decl) || DECL_STATIC_DESTRUCTOR (decl)))
     return true;
@@ -339,7 +317,7 @@ symbol_table::process_new_functions (void)
 	  if ((state == IPA_SSA || state == IPA_SSA_AFTER_INLINING)
 	      && !gimple_in_ssa_p (DECL_STRUCT_FUNCTION (fndecl)))
 	    g->get_passes ()->execute_early_local_passes ();
-	  else if (inline_summary_vec != NULL)
+	  else if (inline_summaries != NULL)
 	    compute_inline_parameters (node, true);
 	  free_dominance_info (CDI_POST_DOMINATORS);
 	  free_dominance_info (CDI_DOMINATORS);
@@ -398,10 +376,11 @@ cgraph_node::reset (void)
   remove_all_references ();
 }
 
-/* Return true when there are references to the node.  */
+/* Return true when there are references to the node.  INCLUDE_SELF is
+   true if a self reference counts as a reference.  */
 
 bool
-symtab_node::referred_to_p (void)
+symtab_node::referred_to_p (bool include_self)
 {
   ipa_ref *ref = NULL;
 
@@ -411,7 +390,13 @@ symtab_node::referred_to_p (void)
   /* For functions check also calls.  */
   cgraph_node *cn = dyn_cast <cgraph_node *> (this);
   if (cn && cn->callers)
-    return true;
+    {
+      if (include_self)
+	return true;
+      for (cgraph_edge *e = cn->callers; e; e = e->next_caller)
+	if (e->caller != this)
+	  return true;
+    }
   return false;
 }
 
@@ -434,8 +419,10 @@ cgraph_node::finalize_function (tree decl, bool no_collect)
       node->local.redefined_extern_inline = true;
     }
 
-  notice_global_symbol (decl);
+  /* Set definition first before calling notice_global_symbol so that
+     it is available to notice_global_symbol.  */
   node->definition = true;
+  notice_global_symbol (decl);
   node->lowered = DECL_STRUCT_FUNCTION (decl)->cfg != NULL;
 
   /* With -fkeep-inline-functions we are keeping all inline functions except
@@ -451,7 +438,7 @@ cgraph_node::finalize_function (tree decl, bool no_collect)
      declared inline and nested functions.  These were optimized out
      in the original implementation and it is unclear whether we want
      to change the behavior here.  */
-  if ((!opt_for_fn (decl, optimize)
+  if (((!opt_for_fn (decl, optimize) || flag_keep_static_functions)
        && !node->cpp_implicit_alias
        && !DECL_DISREGARD_INLINE_LIMITS (decl)
        && !DECL_DECLARED_INLINE_P (decl)
@@ -463,10 +450,6 @@ cgraph_node::finalize_function (tree decl, bool no_collect)
   /* If we've not yet emitted decl, tell the debug info about it.  */
   if (!TREE_ASM_WRITTEN (decl))
     (*debug_hooks->deferred_inline_function) (decl);
-
-  /* Possibly warn about unused parameters.  */
-  if (warn_unused_parameter)
-    do_warn_unused_parameter (decl);
 
   if (!no_collect)
     ggc_collect ();
@@ -493,6 +476,23 @@ cgraph_node::add_new_function (tree fndecl, bool lowered)
 {
   gcc::pass_manager *passes = g->get_passes ();
   cgraph_node *node;
+
+  if (dump_file)
+    {
+      struct function *fn = DECL_STRUCT_FUNCTION (fndecl);
+      const char *function_type = ((gimple_has_body_p (fndecl))
+				   ? (lowered
+				      ? (gimple_in_ssa_p (fn)
+					 ? "ssa gimple"
+					 : "low gimple")
+				      : "high gimple")
+				   : "to-be-gimplified");
+      fprintf (dump_file,
+	       "Added new %s function %s to callgraph\n",
+	       function_type,
+	       fndecl_name (fndecl));
+    }
+
   switch (symtab->state)
     {
       case PARSING:
@@ -572,8 +572,19 @@ cgraph_node::analyze (void)
 
   if (thunk.thunk_p)
     {
-      create_edge (cgraph_node::get (thunk.alias),
-		   NULL, 0, CGRAPH_FREQ_BASE);
+      cgraph_node *t = cgraph_node::get (thunk.alias);
+
+      create_edge (t, NULL, 0, CGRAPH_FREQ_BASE);
+      /* Target code in expand_thunk may need the thunk's target
+	 to be analyzed, so recurse here.  */
+      if (!t->analyzed)
+	t->analyze ();
+      if (t->alias)
+	{
+	  t = t->get_alias_target ();
+	  if (!t->analyzed)
+	    t->analyze ();
+	}
       if (!expand_thunk (false, false))
 	{
 	  thunk.alias = NULL;
@@ -610,7 +621,6 @@ cgraph_node::analyze (void)
 	 body.  */
       if (!gimple_has_body_p (decl))
 	gimplify_function_tree (decl);
-      dump_function (TDI_generic, decl);
 
       /* Lower the function.  */
       if (!lowered)
@@ -784,8 +794,10 @@ varpool_node::finalize_decl (tree decl)
 
   if (node->definition)
     return;
-  notice_global_symbol (decl);
+  /* Set definition first before calling notice_global_symbol so that
+     it is available to notice_global_symbol.  */
   node->definition = true;
+  notice_global_symbol (decl);
   if (TREE_THIS_VOLATILE (decl) || DECL_PRESERVE_P (decl)
       /* Traditionally we do not eliminate static variables when not
 	 optimizing and when not doing toplevel reoder.  */
@@ -843,9 +855,8 @@ walk_polymorphic_call_targets (hash_set<void *> *reachable_call_targets,
 		  (TREE_TYPE (targets[i]->decl))
 		   == METHOD_TYPE
 	      && !type_in_anonymous_namespace_p
-		   (method_class_type
-		     (TREE_TYPE (targets[i]->decl))))
-	  enqueue_node (targets[i]);
+		   (TYPE_METHOD_BASETYPE (TREE_TYPE (targets[i]->decl))))
+	    enqueue_node (targets[i]);
 	}
     }
 
@@ -899,14 +910,81 @@ walk_polymorphic_call_targets (hash_set<void *> *reachable_call_targets,
     }
 }
 
+/* Issue appropriate warnings for the global declaration DECL.  */
+
+static void
+check_global_declaration (symtab_node *snode)
+{
+  tree decl = snode->decl;
+
+  /* Warn about any function declared static but not defined.  We don't
+     warn about variables, because many programs have static variables
+     that exist only to get some text into the object file.  */
+  if (TREE_CODE (decl) == FUNCTION_DECL
+      && DECL_INITIAL (decl) == 0
+      && DECL_EXTERNAL (decl)
+      && ! DECL_ARTIFICIAL (decl)
+      && ! TREE_NO_WARNING (decl)
+      && ! TREE_PUBLIC (decl)
+      && (warn_unused_function
+	  || snode->referred_to_p (/*include_self=*/false)))
+    {
+      if (snode->referred_to_p (/*include_self=*/false))
+	pedwarn (input_location, 0, "%q+F used but never defined", decl);
+      else
+	warning (OPT_Wunused_function, "%q+F declared %<static%> but never defined", decl);
+      /* This symbol is effectively an "extern" declaration now.  */
+      TREE_PUBLIC (decl) = 1;
+    }
+
+  /* Warn about static fns or vars defined but not used.  */
+  if (((warn_unused_function && TREE_CODE (decl) == FUNCTION_DECL)
+       || (((warn_unused_variable && ! TREE_READONLY (decl))
+	    || (warn_unused_const_variable && TREE_READONLY (decl)))
+	   && TREE_CODE (decl) == VAR_DECL))
+      && ! DECL_IN_SYSTEM_HEADER (decl)
+      && ! snode->referred_to_p (/*include_self=*/false)
+      /* This TREE_USED check is needed in addition to referred_to_p
+	 above, because the `__unused__' attribute is not being
+	 considered for referred_to_p.  */
+      && ! TREE_USED (decl)
+      /* The TREE_USED bit for file-scope decls is kept in the identifier,
+	 to handle multiple external decls in different scopes.  */
+      && ! (DECL_NAME (decl) && TREE_USED (DECL_NAME (decl)))
+      && ! DECL_EXTERNAL (decl)
+      && ! DECL_ARTIFICIAL (decl)
+      && ! DECL_ABSTRACT_ORIGIN (decl)
+      && ! TREE_PUBLIC (decl)
+      /* A volatile variable might be used in some non-obvious way.  */
+      && ! TREE_THIS_VOLATILE (decl)
+      /* Global register variables must be declared to reserve them.  */
+      && ! (TREE_CODE (decl) == VAR_DECL && DECL_REGISTER (decl))
+      /* Global ctors and dtors are called by the runtime.  */
+      && (TREE_CODE (decl) != FUNCTION_DECL
+	  || (!DECL_STATIC_CONSTRUCTOR (decl)
+	      && !DECL_STATIC_DESTRUCTOR (decl)))
+      /* Otherwise, ask the language.  */
+      && lang_hooks.decls.warn_unused_global (decl))
+    warning_at (DECL_SOURCE_LOCATION (decl),
+		(TREE_CODE (decl) == FUNCTION_DECL)
+		? OPT_Wunused_function
+		: (TREE_READONLY (decl)
+		   ? OPT_Wunused_const_variable
+		   : OPT_Wunused_variable),
+		"%qD defined but not used", decl);
+}
 
 /* Discover all functions and variables that are trivially needed, analyze
    them as well as all functions and variables referred by them  */
 static cgraph_node *first_analyzed;
 static varpool_node *first_analyzed_var;
 
+/* FIRST_TIME is set to TRUE for the first time we are called for a
+   translation unit from finalize_compilation_unit() or false
+   otherwise.  */
+
 static void
-analyze_functions (void)
+analyze_functions (bool first_time)
 {
   /* Keep track of already processed nodes when called multiple times for
      intermodule optimization.  */
@@ -1000,7 +1078,20 @@ analyze_functions (void)
 		cnode->analyze ();
 
 	      for (edge = cnode->callees; edge; edge = edge->next_callee)
-		if (edge->callee->definition)
+		if (edge->callee->definition
+		    && (!DECL_EXTERNAL (edge->callee->decl)
+			/* When not optimizing, do not try to analyze extern
+			   inline functions.  Doing so is pointless.  */
+			|| opt_for_fn (edge->callee->decl, optimize)
+			/* Weakrefs needs to be preserved.  */
+			|| edge->callee->alias
+			/* always_inline functions are inlined aven at -O0.  */
+		        || lookup_attribute
+				 ("always_inline",
+			          DECL_ATTRIBUTES (edge->callee->decl))
+			/* Multiversioned functions needs the dispatcher to
+			   be produced locally even for extern functions.  */
+			|| edge->callee->function_version ()))
 		   enqueue_node (edge->callee);
 	      if (opt_for_fn (cnode->decl, optimize)
 		  && opt_for_fn (cnode->decl, flag_devirtualize))
@@ -1040,10 +1131,18 @@ analyze_functions (void)
 	      for (next = node->same_comdat_group;
 		   next != node;
 		   next = next->same_comdat_group)
-		enqueue_node (next);
+		if (!next->comdat_local_p ())
+		  enqueue_node (next);
 	    }
 	  for (i = 0; node->iterate_reference (i, ref); i++)
-	    if (ref->referred->definition)
+	    if (ref->referred->definition
+		&& (!DECL_EXTERNAL (ref->referred->decl)
+		    || ((TREE_CODE (ref->referred->decl) != FUNCTION_DECL
+			 && optimize)
+			|| (TREE_CODE (ref->referred->decl) == FUNCTION_DECL
+			    && opt_for_fn (ref->referred->decl, optimize))
+		    || node->alias
+		    || ref->referred->alias)))
 	      enqueue_node (ref->referred);
 	  symtab->process_new_functions ();
 	}
@@ -1055,6 +1154,13 @@ analyze_functions (void)
     {
       fprintf (symtab->dump_file, "\n\nInitial ");
       symtab_node::dump_table (symtab->dump_file);
+    }
+
+  if (first_time)
+    {
+      symtab_node *snode;
+      FOR_EACH_SYMBOL (snode)
+	check_global_declaration (snode);
     }
 
   if (symtab->dump_file)
@@ -1069,6 +1175,19 @@ analyze_functions (void)
 	{
 	  if (symtab->dump_file)
 	    fprintf (symtab->dump_file, " %s", node->name ());
+
+	  /* See if the debugger can use anything before the DECL
+	     passes away.  Perhaps it can notice a DECL that is now a
+	     constant and can tag the early DIE with an appropriate
+	     attribute.
+
+	     Otherwise, this is the last chance the debug_hooks have
+	     at looking at optimized away DECLs, since
+	     late_global_decl will subsequently be called from the
+	     contents of the now pruned symbol table.  */
+	  if (!decl_function_context (node->decl))
+	    (*debug_hooks->late_global_decl) (node->decl);
+
 	  node->remove ();
 	  continue;
 	}
@@ -1193,13 +1312,12 @@ handle_alias_pairs (void)
 static void
 mark_functions_to_output (void)
 {
-  cgraph_node *node;
-#ifdef ENABLE_CHECKING
   bool check_same_comdat_groups = false;
+  cgraph_node *node;
 
-  FOR_EACH_FUNCTION (node)
-    gcc_assert (!node->process);
-#endif
+  if (flag_checking)
+    FOR_EACH_FUNCTION (node)
+      gcc_assert (!node->process);
 
   FOR_EACH_FUNCTION (node)
     {
@@ -1233,15 +1351,14 @@ mark_functions_to_output (void)
 	}
       else if (node->same_comdat_group)
 	{
-#ifdef ENABLE_CHECKING
-	  check_same_comdat_groups = true;
-#endif
+	  if (flag_checking)
+	    check_same_comdat_groups = true;
 	}
       else
 	{
 	  /* We should've reclaimed all functions that are not needed.  */
-#ifdef ENABLE_CHECKING
-	  if (!node->global.inlined_to
+	  if (flag_checking
+	      && !node->global.inlined_to
 	      && gimple_has_body_p (decl)
 	      /* FIXME: in ltrans unit when offline copy is outside partition but inline copies
 		 are inside partition, we can end up not removing the body since we no longer
@@ -1254,7 +1371,6 @@ mark_functions_to_output (void)
 	      node->debug ();
 	      internal_error ("failed to reclaim unneeded function");
 	    }
-#endif
 	  gcc_assert (node->global.inlined_to
 		      || !gimple_has_body_p (decl)
 		      || node->in_other_partition
@@ -1265,8 +1381,7 @@ mark_functions_to_output (void)
 	}
 
     }
-#ifdef ENABLE_CHECKING
-  if (check_same_comdat_groups)
+  if (flag_checking && check_same_comdat_groups)
     FOR_EACH_FUNCTION (node)
       if (node->same_comdat_group && !node->process)
 	{
@@ -1286,7 +1401,6 @@ mark_functions_to_output (void)
 			      "comdat group");
 	    }
 	}
-#endif
 }
 
 /* DECL is FUNCTION_DECL.  Initialize datastructures so DECL is a function
@@ -1296,9 +1410,10 @@ mark_functions_to_output (void)
    return basic block in the function body.  */
 
 basic_block
-init_lowered_empty_function (tree decl, bool in_ssa)
+init_lowered_empty_function (tree decl, bool in_ssa, gcov_type count)
 {
   basic_block bb;
+  edge e;
 
   current_function_decl = decl;
   allocate_struct_function (decl, false);
@@ -1324,9 +1439,19 @@ init_lowered_empty_function (tree decl, bool in_ssa)
   loops_for_fn (cfun)->state |= LOOPS_MAY_HAVE_MULTIPLE_LATCHES;
 
   /* Create BB for body of the function and connect it properly.  */
-  bb = create_basic_block (NULL, (void *) 0, ENTRY_BLOCK_PTR_FOR_FN (cfun));
-  make_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun), bb, EDGE_FALLTHRU);
-  make_edge (bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
+  ENTRY_BLOCK_PTR_FOR_FN (cfun)->count = count;
+  ENTRY_BLOCK_PTR_FOR_FN (cfun)->frequency = REG_BR_PROB_BASE;
+  EXIT_BLOCK_PTR_FOR_FN (cfun)->count = count;
+  EXIT_BLOCK_PTR_FOR_FN (cfun)->frequency = REG_BR_PROB_BASE;
+  bb = create_basic_block (NULL, ENTRY_BLOCK_PTR_FOR_FN (cfun));
+  bb->count = count;
+  bb->frequency = BB_FREQ_MAX;
+  e = make_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun), bb, EDGE_FALLTHRU);
+  e->count = count;
+  e->probability = REG_BR_PROB_BASE;
+  e = make_edge (bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
+  e->count = count;
+  e->probability = REG_BR_PROB_BASE;
   add_bb_to_loop (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun)->loop_father);
 
   return bb;
@@ -1453,6 +1578,10 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
   tree thunk_fndecl = decl;
   tree a;
 
+  /* Instrumentation thunk is the same function with
+     a different signature.  Never need to expand it.  */
+  if (thunk.add_pointer_bounds_args)
+    return false;
 
   if (!force_gimple_thunk && this_adjusting
       && targetm.asm_out.can_output_mi_thunk (thunk_fndecl, fixed_offset,
@@ -1475,7 +1604,8 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       current_function_decl = thunk_fndecl;
 
       /* Ensure thunks are emitted in their correct sections.  */
-      resolve_unique_section (thunk_fndecl, 0, flag_function_sections);
+      resolve_unique_section (thunk_fndecl, 0,
+			      flag_function_sections);
 
       DECL_RESULT (thunk_fndecl)
 	= build_decl (DECL_SOURCE_LOCATION (thunk_fndecl),
@@ -1488,6 +1618,7 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       fn_block = make_node (BLOCK);
       BLOCK_VARS (fn_block) = a;
       DECL_INITIAL (thunk_fndecl) = fn_block;
+      allocate_struct_function (thunk_fndecl, false);
       init_function_start (thunk_fndecl);
       cfun->is_thunk = 1;
       insn_locations_init ();
@@ -1502,10 +1633,17 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       insn_locations_finalize ();
       init_insn_lengths ();
       free_after_compilation (cfun);
-      set_cfun (NULL);
       TREE_ASM_WRITTEN (thunk_fndecl) = 1;
       thunk.thunk_p = false;
       analyzed = false;
+    }
+  else if (stdarg_p (TREE_TYPE (thunk_fndecl)))
+    {
+      error ("generic thunk code fails for method %qD which uses %<...%>",
+	     thunk_fndecl);
+      TREE_ASM_WRITTEN (thunk_fndecl) = 1;
+      analyzed = true;
+      return false;
     }
   else
     {
@@ -1517,9 +1655,11 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       int i;
       tree resdecl;
       tree restmp = NULL;
+      tree resbnd = NULL;
 
       gcall *call;
       greturn *ret;
+      bool alias_is_noreturn = TREE_THIS_VOLATILE (alias);
 
       if (in_lto_p)
 	get_untransformed_body ();
@@ -1528,7 +1668,8 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       current_function_decl = thunk_fndecl;
 
       /* Ensure thunks are emitted in their correct sections.  */
-      resolve_unique_section (thunk_fndecl, 0, flag_function_sections);
+      resolve_unique_section (thunk_fndecl, 0,
+			      flag_function_sections);
 
       DECL_IGNORED_P (thunk_fndecl) = 1;
       bitmap_obstack_initialize (NULL);
@@ -1549,12 +1690,13 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       else
 	resdecl = DECL_RESULT (thunk_fndecl);
 
-      bb = then_bb = else_bb = return_bb = init_lowered_empty_function (thunk_fndecl, true);
+      bb = then_bb = else_bb = return_bb
+	= init_lowered_empty_function (thunk_fndecl, true, count);
 
       bsi = gsi_start_bb (bb);
 
       /* Build call to the function being thunked.  */
-      if (!VOID_TYPE_P (restype))
+      if (!VOID_TYPE_P (restype) && !alias_is_noreturn)
 	{
 	  if (DECL_BY_REFERENCE (resdecl))
 	    {
@@ -1568,11 +1710,16 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 	    }
 	  else if (!is_gimple_reg_type (restype))
 	    {
-	      restmp = resdecl;
+	      if (aggregate_value_p (resdecl, TREE_TYPE (thunk_fndecl)))
+		{
+		  restmp = resdecl;
 
-	      if (TREE_CODE (restmp) == VAR_DECL)
-		add_local_decl (cfun, restmp);
-	      BLOCK_VARS (DECL_INITIAL (current_function_decl)) = restmp;
+		  if (TREE_CODE (restmp) == VAR_DECL)
+		    add_local_decl (cfun, restmp);
+		  BLOCK_VARS (DECL_INITIAL (current_function_decl)) = restmp;
+		}
+	      else
+		restmp = create_tmp_var (restype, "retval");
 	    }
 	  else
 	    restmp = create_tmp_reg (restype, "retval");
@@ -1581,21 +1728,25 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       for (arg = a; arg; arg = DECL_CHAIN (arg))
         nargs++;
       auto_vec<tree> vargs (nargs);
+      i = 0;
+      arg = a;
       if (this_adjusting)
-        vargs.quick_push (thunk_adjust (&bsi, a, 1, fixed_offset,
-					virtual_offset));
-      else if (nargs)
-        vargs.quick_push (a);
+	{
+	  vargs.quick_push (thunk_adjust (&bsi, a, 1, fixed_offset,
+					  virtual_offset));
+	  arg = DECL_CHAIN (a);
+	  i = 1;
+	}
 
       if (nargs)
-        for (i = 1, arg = DECL_CHAIN (a); i < nargs; i++, arg = DECL_CHAIN (arg))
+	for (; i < nargs; i++, arg = DECL_CHAIN (arg))
 	  {
 	    tree tmp = arg;
 	    if (!is_gimple_val (arg))
 	      {
 		tmp = create_tmp_reg (TYPE_MAIN_VARIANT
 				      (TREE_TYPE (arg)), "arg");
-		gimple stmt = gimple_build_assign (tmp, arg);
+		gimple *stmt = gimple_build_assign (tmp, arg);
 		gsi_insert_after (&bsi, stmt, GSI_NEW_STMT);
 	      }
 	    vargs.quick_push (tmp);
@@ -1604,15 +1755,34 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
       callees->call_stmt = call;
       gimple_call_set_from_thunk (call, true);
       gimple_call_set_with_bounds (call, instrumentation_clone);
-      if (restmp)
+
+      /* Return slot optimization is always possible and in fact requred to
+         return values with DECL_BY_REFERENCE.  */
+      if (aggregate_value_p (resdecl, TREE_TYPE (thunk_fndecl))
+	  && (!is_gimple_reg_type (TREE_TYPE (resdecl))
+	      || DECL_BY_REFERENCE (resdecl)))
+        gimple_call_set_return_slot_opt (call, true);
+
+      if (restmp && !alias_is_noreturn)
 	{
           gimple_call_set_lhs (call, restmp);
 	  gcc_assert (useless_type_conversion_p (TREE_TYPE (restmp),
 						 TREE_TYPE (TREE_TYPE (alias))));
 	}
       gsi_insert_after (&bsi, call, GSI_NEW_STMT);
-      if (!(gimple_call_flags (call) & ECF_NORETURN))
+      if (!alias_is_noreturn)
 	{
+	  if (instrumentation_clone
+	      && !DECL_BY_REFERENCE (resdecl)
+	      && restmp
+	      && BOUNDED_P (restmp))
+	    {
+	      resbnd = chkp_insert_retbnd_call (NULL, restmp, &bsi);
+	      create_edge (get_create (gimple_call_fndecl (gsi_stmt (bsi))),
+			   as_a <gcall *> (gsi_stmt (bsi)),
+			   callees->count, callees->frequency);
+	    }
+
 	  if (restmp && !this_adjusting
 	      && (fixed_offset || virtual_offset))
 	    {
@@ -1620,14 +1790,21 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 
 	      if (TREE_CODE (TREE_TYPE (restmp)) == POINTER_TYPE)
 		{
-		  gimple stmt;
+		  gimple *stmt;
+		  edge e;
 		  /* If the return type is a pointer, we need to
 		     protect against NULL.  We know there will be an
 		     adjustment, because that's why we're emitting a
 		     thunk.  */
-		  then_bb = create_basic_block (NULL, (void *) 0, bb);
-		  return_bb = create_basic_block (NULL, (void *) 0, then_bb);
-		  else_bb = create_basic_block (NULL, (void *) 0, else_bb);
+		  then_bb = create_basic_block (NULL, bb);
+		  then_bb->count = count - count / 16;
+		  then_bb->frequency = BB_FREQ_MAX - BB_FREQ_MAX / 16;
+		  return_bb = create_basic_block (NULL, then_bb);
+		  return_bb->count = count;
+		  return_bb->frequency = BB_FREQ_MAX;
+		  else_bb = create_basic_block (NULL, else_bb);
+		  then_bb->count = count / 16;
+		  then_bb->frequency = BB_FREQ_MAX / 16;
 		  add_bb_to_loop (then_bb, bb->loop_father);
 		  add_bb_to_loop (return_bb, bb->loop_father);
 		  add_bb_to_loop (else_bb, bb->loop_father);
@@ -1637,11 +1814,21 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 					    build_zero_cst (TREE_TYPE (restmp)),
 					    NULL_TREE, NULL_TREE);
 		  gsi_insert_after (&bsi, stmt, GSI_NEW_STMT);
-		  make_edge (bb, then_bb, EDGE_TRUE_VALUE);
-		  make_edge (bb, else_bb, EDGE_FALSE_VALUE);
-		  make_edge (return_bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
-		  make_edge (then_bb, return_bb, EDGE_FALLTHRU);
-		  make_edge (else_bb, return_bb, EDGE_FALLTHRU);
+		  e = make_edge (bb, then_bb, EDGE_TRUE_VALUE);
+		  e->probability = REG_BR_PROB_BASE - REG_BR_PROB_BASE / 16;
+		  e->count = count - count / 16;
+		  e = make_edge (bb, else_bb, EDGE_FALSE_VALUE);
+		  e->probability = REG_BR_PROB_BASE / 16;
+		  e->count = count / 16;
+		  e = make_edge (return_bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
+		  e->probability = REG_BR_PROB_BASE;
+		  e->count = count;
+		  e = make_edge (then_bb, return_bb, EDGE_FALLTHRU);
+		  e->probability = REG_BR_PROB_BASE;
+		  e->count = count - count / 16;
+		  e = make_edge (else_bb, return_bb, EDGE_FALLTHRU);
+		  e->probability = REG_BR_PROB_BASE;
+		  e->count = count / 16;
 		  bsi = gsi_last_bb (then_bb);
 		}
 
@@ -1649,7 +1836,7 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 				     fixed_offset, virtual_offset);
 	      if (true_label)
 		{
-		  gimple stmt;
+		  gimple *stmt;
 		  bsi = gsi_last_bb (else_bb);
 		  stmt = gimple_build_assign (restmp,
 					      build_zero_cst (TREE_TYPE (restmp)));
@@ -1665,6 +1852,7 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 	    ret = gimple_build_return (restmp);
 	  else
 	    ret = gimple_build_return (resdecl);
+	  gimple_return_set_retbnd (ret, resbnd);
 
 	  gsi_insert_after (&bsi, ret, GSI_NEW_STMT);
 	}
@@ -1675,13 +1863,13 @@ cgraph_node::expand_thunk (bool output_asm_thunks, bool force_gimple_thunk)
 	}
 
       cfun->gimple_df->in_ssa_p = true;
+      profile_status_for_fn (cfun)
+        = count ? PROFILE_READ : PROFILE_GUESSED;
       /* FIXME: C++ FE should stop setting TREE_ASM_WRITTEN on thunks.  */
       TREE_ASM_WRITTEN (thunk_fndecl) = false;
       delete_unreachable_blocks ();
       update_ssa (TODO_update_ssa);
-#ifdef ENABLE_CHECKING
-      verify_flow_info ();
-#endif
+      checking_verify_flow_info ();
       free_dominance_info (CDI_DOMINATORS);
 
       /* Since we want to emit the thunk, we explicitly mark its name as
@@ -1756,9 +1944,11 @@ cgraph_node::expand (void)
   bitmap_obstack_initialize (NULL);
 
   /* Initialize the RTL code for the function.  */
-  current_function_decl = decl;
   saved_loc = input_location;
   input_location = DECL_SOURCE_LOCATION (decl);
+
+  gcc_assert (DECL_STRUCT_FUNCTION (decl));
+  push_cfun (DECL_STRUCT_FUNCTION (decl));
   init_function_start (decl);
 
   gimple_register_cfg_hooks ();
@@ -1826,8 +2016,8 @@ cgraph_node::expand (void)
 
   /* Make sure that BE didn't give up on compiling.  */
   gcc_assert (TREE_ASM_WRITTEN (decl));
-  set_cfun (NULL);
-  current_function_decl = NULL;
+  if (cfun)
+    pop_cfun ();
 
   /* It would make a lot more sense to output thunks before function body to get more
      forward and lest backwarding jumps.  This however would need solving problem
@@ -1899,14 +2089,14 @@ expand_all_functions (void)
 
       if (node->process)
 	{
-     expanded_func_count++;
-     if(node->tp_first_run)
-       profiled_func_count++;
+	  expanded_func_count++;
+	  if(node->tp_first_run)
+	    profiled_func_count++;
 
-    if (symtab->dump_file)
-	  fprintf (symtab->dump_file,
-		   "Time profile order in expand_all_functions:%s:%d\n",
-		   node->asm_name (), node->tp_first_run);
+	  if (symtab->dump_file)
+	    fprintf (symtab->dump_file,
+		     "Time profile order in expand_all_functions:%s:%d\n",
+		     node->asm_name (), node->tp_first_run);
 	  node->process = 0;
 	  node->expand ();
 	}
@@ -2085,12 +2275,15 @@ ipa_passes (void)
       if (g->have_offload)
 	{
 	  section_name_prefix = OFFLOAD_SECTION_NAME_PREFIX;
-	  ipa_write_summaries (true);
+	  lto_stream_offload_p = true;
+	  ipa_write_summaries ();
+	  lto_stream_offload_p = false;
 	}
       if (flag_lto)
 	{
 	  section_name_prefix = LTO_SECTION_NAME_PREFIX;
-	  ipa_write_summaries (false);
+	  lto_stream_offload_p = false;
+	  ipa_write_summaries ();
 	}
     }
 
@@ -2162,9 +2355,7 @@ symbol_table::compile (void)
   if (seen_error ())
     return;
 
-#ifdef ENABLE_CHECKING
-  symtab_node::verify_symtab_nodes ();
-#endif
+  symtab_node::checking_verify_symtab_nodes ();
 
   timevar_push (TV_CGRAPHOPT);
   if (pre_ipa_mem_report)
@@ -2213,9 +2404,7 @@ symbol_table::compile (void)
   (*debug_hooks->assembly_start) ();
   if (!quiet_flag)
     fprintf (stderr, "Assembling functions:\n");
-#ifdef ENABLE_CHECKING
-  symtab_node::verify_symtab_nodes ();
-#endif
+  symtab_node::checking_verify_symtab_nodes ();
 
   materialize_all_clones ();
   bitmap_obstack_initialize (NULL);
@@ -2271,7 +2460,8 @@ symbol_table::compile (void)
       fprintf (dump_file, "\nFinal ");
       symtab_node::dump_table (dump_file);
     }
-#ifdef ENABLE_CHECKING
+  if (!flag_checking)
+    return;
   symtab_node::verify_symtab_nodes ();
   /* Double check that all inline clones are gone and that all
      function bodies have been released from memory.  */
@@ -2290,7 +2480,6 @@ symbol_table::compile (void)
       if (error_found)
 	internal_error ("nodes with unreleased memory found");
     }
-#endif
 }
 
 
@@ -2326,13 +2515,26 @@ symbol_table::finalize_compilation_unit (void)
 
   /* Gimplify and lower all functions, compute reachability and
      remove unreachable nodes.  */
-  analyze_functions ();
+  analyze_functions (/*first_time=*/true);
 
   /* Mark alias targets necessary and emit diagnostics.  */
   handle_alias_pairs ();
 
   /* Gimplify and lower thunks.  */
-  analyze_functions ();
+  analyze_functions (/*first_time=*/false);
+
+  if (!seen_error ())
+    {
+      /* Emit early debug for reachable functions, and by consequence,
+	 locally scoped symbols.  */
+      struct cgraph_node *cnode;
+      FOR_EACH_FUNCTION_WITH_GIMPLE_BODY (cnode)
+	(*debug_hooks->early_global_decl) (cnode->decl);
+
+      /* Clean up anything that needs cleaning up after initial debug
+	 generation.  */
+      (*debug_hooks->early_finish) ();
+    }
 
   /* Finally drive the pass manager.  */
   compile ();
@@ -2362,40 +2564,41 @@ cgraphunit_c_finalize (void)
 void
 cgraph_node::create_wrapper (cgraph_node *target)
 {
-    /* Preserve DECL_RESULT so we get right by reference flag.  */
-    tree decl_result = DECL_RESULT (decl);
+  /* Preserve DECL_RESULT so we get right by reference flag.  */
+  tree decl_result = DECL_RESULT (decl);
 
-    /* Remove the function's body but keep arguments to be reused
-       for thunk.  */
-    release_body (true);
-    reset ();
+  /* Remove the function's body but keep arguments to be reused
+     for thunk.  */
+  release_body (true);
+  reset ();
 
-    DECL_RESULT (decl) = decl_result;
-    DECL_INITIAL (decl) = NULL;
-    allocate_struct_function (decl, false);
-    set_cfun (NULL);
+  DECL_UNINLINABLE (decl) = false;
+  DECL_RESULT (decl) = decl_result;
+  DECL_INITIAL (decl) = NULL;
+  allocate_struct_function (decl, false);
+  set_cfun (NULL);
 
-    /* Turn alias into thunk and expand it into GIMPLE representation.  */
-    definition = true;
-    thunk.thunk_p = true;
-    thunk.this_adjusting = false;
+  /* Turn alias into thunk and expand it into GIMPLE representation.  */
+  definition = true;
 
-    cgraph_edge *e = create_edge (target, NULL, 0, CGRAPH_FREQ_BASE);
+  memset (&thunk, 0, sizeof (cgraph_thunk_info));
+  thunk.thunk_p = true;
+  create_edge (target, NULL, count, CGRAPH_FREQ_BASE);
+  callees->can_throw_external = !TREE_NOTHROW (target->decl);
 
-    tree arguments = DECL_ARGUMENTS (decl);
+  tree arguments = DECL_ARGUMENTS (decl);
 
-    while (arguments)
-      {
-	TREE_ADDRESSABLE (arguments) = false;
-	arguments = TREE_CHAIN (arguments);
-      }
+  while (arguments)
+    {
+      TREE_ADDRESSABLE (arguments) = false;
+      arguments = TREE_CHAIN (arguments);
+    }
 
-    expand_thunk (false, true);
-    e->call_stmt_cannot_inline_p = true;
+  expand_thunk (false, true);
 
-    /* Inline summary set-up.  */
-    analyze ();
-    inline_analyze_function (this);
+  /* Inline summary set-up.  */
+  analyze ();
+  inline_analyze_function (this);
 }
 
 #include "gt-cgraphunit.h"

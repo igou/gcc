@@ -2,12 +2,11 @@
 --                                                                          --
 --                         GNAT LIBRARY COMPONENTS                          --
 --                                                                          --
---                          A D A . C O N T A I N E R S
---           . F O R M A L _ I N D E F I N I T E _ V E C T O R S            --
+--                 ADA.CONTAINERS.FORMAL_INDEFINITE_VECTORS                 --
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---             Copyright (C) 2014, Free Software Foundation, Inc.           --
+--          Copyright (C) 2014-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- This specification is derived from the Ada Reference Manual for use with --
 -- GNAT. The copyright notice above, and the license provisions that follow --
@@ -41,9 +40,13 @@ generic
    type Index_Type is range <>;
    type Element_Type (<>) is private;
    Max_Size_In_Storage_Elements : Natural :=
-     Element_Type'Max_Size_In_Storage_Elements;
-   --  This has the same meaning as in Ada.Containers.Bounded_Holders, with the
-   --  same restrictions.
+                                    Element_Type'Max_Size_In_Storage_Elements;
+   --  Maximum size of Vector elements in bytes. This has the same meaning as
+   --  in Ada.Containers.Bounded_Holders, with the same restrictions. Note that
+   --  setting this too small can lead to erroneous execution; see comments in
+   --  Ada.Containers.Bounded_Holders. If Element_Type is class-wide, it is the
+   --  responsibility of clients to calculate the maximum size of all types in
+   --  the class.
 
    with function "=" (Left, Right : Element_Type) return Boolean is <>;
 
@@ -56,6 +59,7 @@ package Ada.Containers.Formal_Indefinite_Vectors with
   SPARK_Mode => On
 is
    pragma Annotate (GNATprove, External_Axiomatization);
+   pragma Annotate (CodePeer, Skip_Analysis);
 
    subtype Extended_Index is Index_Type'Base
    range Index_Type'First - 1 ..
@@ -81,7 +85,8 @@ is
      Global => null;
 
    function Capacity (Container : Vector) return Capacity_Range with
-     Global => null;
+     Global => null,
+     Post   => Capacity'Result >= Container.Capacity;
 
    procedure Reserve_Capacity
      (Container : in out Vector;
@@ -111,7 +116,7 @@ is
       Capacity : Capacity_Range := 0) return Vector
    with
      Global => null,
-     Pre    => (if Bounded then Length (Source) <= Capacity);
+     Pre    => (if Bounded then (Capacity = 0 or Length (Source) <= Capacity));
 
    function Element
      (Container : Vector;
@@ -133,16 +138,17 @@ is
       New_Item  : Vector)
    with
      Global => null,
-     Pre    => (if Bounded then
-                 Length (Container) + Length (New_Item) <= Container.Capacity);
+     Pre    => (if Bounded
+                then Length (Container) + Length (New_Item) <=
+                                                       Container.Capacity);
 
    procedure Append
      (Container : in out Vector;
       New_Item  : Element_Type)
    with
      Global => null,
-     Pre    => (if Bounded then
-                  Length (Container) < Container.Capacity);
+     Pre    => (if Bounded
+                then Length (Container) < Container.Capacity);
 
    procedure Delete_Last
      (Container : in out Vector)
@@ -197,7 +203,7 @@ is
 
    generic
       with function "<" (Left, Right : Element_Type) return Boolean is <>;
-   package Generic_Sorting is
+   package Generic_Sorting with SPARK_Mode is
 
       function Is_Sorted (Container : Vector) return Boolean with
         Global => null;
@@ -243,7 +249,7 @@ private
    package Def is new Formal_Vectors (Index_Type, Holder, "=", Bounded);
    use Def;
 
-   --  ????Assert that Def subtypes have the same range.
+   --  ????Assert that Def subtypes have the same range
 
    type Vector (Capacity : Capacity_Range) is limited record
       V : Def.Vector (Capacity);

@@ -1,5 +1,5 @@
 /* Definitions for C++ name lookup routines.
-   Copyright (C) 2003-2014 Free Software Foundation, Inc.
+   Copyright (C) 2003-2015 Free Software Foundation, Inc.
    Contributed by Gabriel Dos Reis <gdr@integrable-solutions.net>
 
 This file is part of GCC.
@@ -21,21 +21,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "flags.h"
-#include "tree.h"
+#include "cp-tree.h"
+#include "timevar.h"
 #include "stringpool.h"
 #include "print-tree.h"
 #include "attribs.h"
-#include "cp-tree.h"
-#include "name-lookup.h"
-#include "timevar.h"
-#include "diagnostic-core.h"
-#include "intl.h"
 #include "debug.h"
 #include "c-family/c-pragma.h"
 #include "params.h"
-#include "hash-set.h"
 
 /* The bindings for a particular name in a particular scope.  */
 
@@ -332,7 +325,7 @@ new_class_binding (tree name, tree value, tree type, cp_binding_level *scope)
 /* Make DECL the innermost binding for ID.  The LEVEL is the binding
    level at which this declaration is being bound.  */
 
-static void
+void
 push_binding (tree id, tree decl, cp_binding_level* level)
 {
   cxx_binding *binding;
@@ -590,7 +583,7 @@ diagnose_name_conflict (tree decl, tree bval)
   else
     error ("%q#D conflicts with a previous declaration", decl);
 
-  inform (input_location, "previous declaration %q+#D", bval);
+  inform (location_of (bval), "previous declaration %q#D", bval);
 }
 
 /* Wrapper for supplement_binding_1.  */
@@ -875,8 +868,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 		      pedwarn (input_location, 0,
                                "declaration of %q#D with C language linkage",
 			       x);
-		      pedwarn (input_location, 0,
-                               "conflicts with previous declaration %q+#D",
+		      pedwarn (DECL_SOURCE_LOCATION (previous), 0,
+                               "conflicts with previous declaration %q#D",
 			       previous);
 		      pedwarn (input_location, 0,
                                "due to different exception specifications");
@@ -890,8 +883,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 		{
 		  pedwarn (input_location, 0,
 			   "declaration of %q#D with C language linkage", x);
-		  pedwarn (input_location, 0,
-			   "conflicts with previous declaration %q+#D",
+		  pedwarn (DECL_SOURCE_LOCATION (previous), 0,
+			   "conflicts with previous declaration %q#D",
 			   previous);
 		}
 	    }
@@ -925,7 +918,18 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 	}
 
       if (DECL_DECLARES_FUNCTION_P (t))
-	check_default_args (t);
+	{
+	  check_default_args (t);
+
+	  if (is_friend && t == x && !flag_friend_injection)
+	    {
+	      /* This is a new friend declaration of a function or a
+		 function template, so hide it from ordinary function
+		 lookup.  */
+	      DECL_ANTICIPATED (t) = 1;
+	      DECL_HIDDEN_FRIEND_P (t) = 1;
+	    }
+	}
 
       if (t != x || DECL_FUNCTION_TEMPLATE_P (t))
 	return t;
@@ -954,9 +958,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 	  /* If this is a locally defined typedef in a function that
 	     is not a template instantation, record it to implement
 	     -Wunused-local-typedefs.  */
-	  if (current_instantiation () == NULL
-	      || (current_instantiation ()->decl != current_function_decl))
-	  record_locally_defined_typedef (x);
+	  if (!instantiating_current_function_p ())
+	    record_locally_defined_typedef (x);
 	}
 
       /* Multiple external decls of the same identifier ought to match.
@@ -982,19 +985,9 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 	    {
 	      if (permerror (input_location, "type mismatch with previous "
 			     "external decl of %q#D", x))
-		inform (input_location, "previous external decl of %q+#D",
-			decl);
+		inform (DECL_SOURCE_LOCATION (decl),
+			"previous external decl of %q#D", decl);
 	    }
-	}
-
-      if (TREE_CODE (x) == FUNCTION_DECL
-	  && is_friend
-	  && !flag_friend_injection)
-	{
-	  /* This is a new declaration of a friend function, so hide
-	     it from ordinary function lookup.  */
-	  DECL_ANTICIPATED (x) = 1;
-	  DECL_HIDDEN_FRIEND_P (x) = 1;
 	}
 
       /* This name is new in its binding level.
@@ -1082,7 +1075,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 	      else
 		{
 		  warning (0, "extern declaration of %q#D doesn%'t match", x);
-		  warning (0, "global declaration %q+#D", oldglobal);
+		  warning_at (DECL_SOURCE_LOCATION (oldglobal), 0,
+			      "global declaration %q#D", oldglobal);
 		}
 	    }
 	  /* If we have a local external declaration,
@@ -1170,8 +1164,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 			   || oldscope->kind == sk_for))
 		{
 		  error ("redeclaration of %q#D", x);
-		  inform (input_location, "%q+#D previously declared here",
-			  oldlocal);
+		  inform (DECL_SOURCE_LOCATION (oldlocal),
+			  "%q#D previously declared here", oldlocal);
 		  nowarn = true;
 		}
 	      /* C++11:
@@ -1193,8 +1187,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
 			   && in_function_try_handler))
 		{
 		  if (permerror (input_location, "redeclaration of %q#D", x))
-		    inform (input_location, "%q+#D previously declared here",
-			    oldlocal);
+		    inform (DECL_SOURCE_LOCATION (oldlocal),
+			    "%q#D previously declared here", oldlocal);
 		  nowarn = true;
 		}
 
@@ -1268,7 +1262,8 @@ pushdecl_maybe_friend_1 (tree x, bool is_friend)
                               old and new decls are type decls.  */
                            || (TREE_CODE (oldglobal) == TYPE_DECL
                                && (!DECL_ARTIFICIAL (oldglobal)
-                                   || TREE_CODE (x) == TYPE_DECL))))
+                                   || TREE_CODE (x) == TYPE_DECL)))
+		       && !instantiating_current_function_p ())
 		/* XXX shadow warnings in outer-more namespaces */
 		{
 		  if (warning_at (input_location, OPT_Wshadow,
@@ -1409,9 +1404,11 @@ check_for_out_of_scope_variable (tree decl)
       if (!DECL_ERROR_REPORTED (decl))
 	{
 	  warning (0, "name lookup of %qD changed", DECL_NAME (decl));
-	  warning (0, "  matches this %q+D under ISO standard rules",
-		   shadowed);
-	  warning (0, "  matches this %q+D under old rules", decl);
+	  warning_at (DECL_SOURCE_LOCATION (shadowed), 0,
+		      "  matches this %qD under ISO standard rules",
+		      shadowed);
+	  warning_at (DECL_SOURCE_LOCATION (decl), 0,
+		      "  matches this %qD under old rules", decl);
 	  DECL_ERROR_REPORTED (decl) = 1;
 	}
       return shadowed;
@@ -1440,7 +1437,8 @@ check_for_out_of_scope_variable (tree decl)
       permerror (input_location, "name lookup of %qD changed for ISO %<for%> scoping",
 	         DECL_NAME (decl));
       if (flag_permissive)
-        permerror (input_location, "  using obsolete binding at %q+D", decl);
+        permerror (DECL_SOURCE_LOCATION (decl),
+		   "  using obsolete binding at %qD", decl);
       else
 	{
 	  static bool hint;
@@ -1586,6 +1584,7 @@ begin_scope (scope_kind kind, tree entity)
     case sk_class:
     case sk_scoped_enum:
     case sk_function_parms:
+    case sk_transaction:
     case sk_omp:
       scope->keep = keep_next_level_flag;
       break;
@@ -2094,7 +2093,7 @@ make_anon_name (void)
 {
   char buf[32];
 
-  sprintf (buf, ANON_AGGRNAME_FORMAT, anon_cnt++);
+  sprintf (buf, anon_aggrname_format (), anon_cnt++);
   return get_identifier (buf);
 }
 
@@ -3399,7 +3398,7 @@ do_class_using_decl (tree scope, tree name)
 			   tf_warning_or_error);
       if (b_kind < bk_proper_base)
 	{
-	  if (!bases_dependent_p)
+	  if (!bases_dependent_p || b_kind == bk_same_type)
 	    {
 	      error_not_base_type (scope, current_class_type);
 	      return NULL_TREE;
@@ -3648,7 +3647,30 @@ handle_namespace_attrs (tree ns, tree attributes)
 	}
       else if (is_attribute_p ("abi_tag", name))
 	{
-	  NAMESPACE_ABI_TAG (ns) = true;
+	  if (!DECL_NAMESPACE_ASSOCIATIONS (ns))
+	    {
+	      warning (OPT_Wattributes, "ignoring %qD attribute on non-inline "
+		       "namespace", name);
+	      continue;
+	    }
+	  if (!DECL_NAME (ns))
+	    {
+	      warning (OPT_Wattributes, "ignoring %qD attribute on anonymous "
+		       "namespace", name);
+	      continue;
+	    }
+	  if (!args)
+	    {
+	      tree dn = DECL_NAME (ns);
+	      args = build_string (IDENTIFIER_LENGTH (dn) + 1,
+				   IDENTIFIER_POINTER (dn));
+	      TREE_TYPE (args) = char_array_type_node;
+	      args = fix_string_type (args);
+	      args = build_tree_list (NULL_TREE, args);
+	    }
+	  if (check_abi_tag_args (args, name))
+	    DECL_ATTRIBUTES (ns) = tree_cons (name, args,
+					      DECL_ATTRIBUTES (ns));
 	}
       else
 	{
@@ -3867,7 +3889,7 @@ do_namespace_alias (tree alias, tree name_space)
 
   /* Emit debug info for namespace alias.  */
   if (!building_stmt_list_p ())
-    (*debug_hooks->global_decl) (alias);
+    (*debug_hooks->early_global_decl) (alias);
 }
 
 /* Like pushdecl, only it places X in the current namespace,
@@ -4134,7 +4156,7 @@ merge_functions (tree s1, tree s2)
 	  /* If the function from S2 is already in S1, there is no
 	     need to add it again.  For `extern "C"' functions, we
 	     might have two FUNCTION_DECLs for the same function, in
-	     different namespaces, but let's leave them in in case
+	     different namespaces, but let's leave them in case
 	     they have different default arguments.  */
 	  if (fn1 == fn2)
 	    break;
@@ -4318,6 +4340,13 @@ hidden_name_p (tree val)
       && TYPE_FUNCTION_OR_TEMPLATE_DECL_P (val)
       && DECL_ANTICIPATED (val))
     return true;
+  if (TREE_CODE (val) == OVERLOAD)
+    {
+      for (tree o = val; o; o = OVL_CHAIN (o))
+	if (!hidden_name_p (OVL_FUNCTION (o)))
+	  return false;
+      return true;
+    }
   return false;
 }
 

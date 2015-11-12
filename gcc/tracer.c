@@ -1,7 +1,7 @@
 /* The tracer pass for the GNU compiler.
    Contributed by Jan Hubicka, SuSE Labs.
    Adapted to work on GIMPLE instead of RTL by Robert Kidd, UIUC.
-   Copyright (C) 2001-2014 Free Software Foundation, Inc.
+   Copyright (C) 2001-2015 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -36,31 +36,15 @@
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "tree.h"
+#include "backend.h"
 #include "rtl.h"
-#include "hard-reg-set.h"
-#include "profile.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "cfganal.h"
-#include "basic-block.h"
-#include "flags.h"
-#include "params.h"
-#include "coverage.h"
-#include "tree-pass.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
-#include "gimple-expr.h"
-#include "is-a.h"
+#include "tree.h"
 #include "gimple.h"
+#include "cfghooks.h"
+#include "tree-pass.h"
+#include "profile.h"
+#include "cfganal.h"
+#include "params.h"
 #include "gimple-iterator.h"
 #include "tree-cfg.h"
 #include "tree-ssa.h"
@@ -104,18 +88,25 @@ bb_seen_p (basic_block bb)
 static bool
 ignore_bb_p (const_basic_block bb)
 {
-  gimple g;
-
   if (bb->index < NUM_FIXED_BLOCKS)
     return true;
   if (optimize_bb_for_size_p (bb))
     return true;
 
-  /* A transaction is a single entry multiple exit region.  It must be
-     duplicated in its entirety or not at all.  */
-  g = last_stmt (CONST_CAST_BB (bb));
-  if (g && gimple_code (g) == GIMPLE_TRANSACTION)
-    return true;
+  if (gimple *g = last_stmt (CONST_CAST_BB (bb)))
+    {
+      /* A transaction is a single entry multiple exit region.  It
+	 must be duplicated in its entirety or not at all.  */
+      if (gimple_code (g) == GIMPLE_TRANSACTION)
+	return true;
+
+      /* An IFN_UNIQUE call must be duplicated as part of its group,
+	 or not at all.  */
+      if (is_gimple_call (g)
+	  && gimple_call_internal_p (g)
+	  && gimple_call_internal_unique_p (g))
+	return true;
+    }
 
   return false;
 }
@@ -126,7 +117,7 @@ static int
 count_insns (basic_block bb)
 {
   gimple_stmt_iterator gsi;
-  gimple stmt;
+  gimple *stmt;
   int n = 0;
 
   for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))

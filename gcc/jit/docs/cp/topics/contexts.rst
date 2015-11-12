@@ -1,4 +1,4 @@
-.. Copyright (C) 2014 Free Software Foundation, Inc.
+.. Copyright (C) 2014-2015 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -144,6 +144,16 @@ Debugging
    :c:macro:`GCCJIT::BOOL_OPTION_DEBUGINFO` to allow stepping through the
    code in a debugger.
 
+.. function:: void\
+              gccjit::context::dump_reproducer_to_file (gcc_jit_context *ctxt,\
+                                                        const char *path)
+
+   This is a thin wrapper around the C API
+   :c:func:`gcc_jit_context_dump_reproducer_to_file`, and hence works the
+   same way.
+
+   Note that the generated source is C code, not C++; this might be of use
+   for seeing what the C++ bindings are doing at the C level.
 
 Options
 -------
@@ -174,6 +184,43 @@ Boolean options
   :c:func:`gcc_jit_context_set_bool_option`; the options have the same
   meaning.
 
+.. function:: void \
+              gccjit::context::set_bool_allow_unreachable_blocks (int bool_value)
+
+   By default, libgccjit will issue an error about unreachable blocks
+   within a function.
+
+   This entrypoint can be used to disable that error; it is a thin wrapper
+   around the C API
+   :c:func:`gcc_jit_context_set_bool_allow_unreachable_blocks`.
+
+   This entrypoint was added in :ref:`LIBGCCJIT_ABI_2`; you can test for
+   its presence using
+
+   .. code-block:: c
+
+      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_set_bool_allow_unreachable_blocks
+
+.. function:: void \
+              gccjit::context::set_bool_use_external_driver (int bool_value)
+
+   libgccjit internally generates assembler, and uses "driver" code
+   for converting it to other formats (e.g. shared libraries).
+
+   By default, libgccjit will use an embedded copy of the driver
+   code.
+
+   This option can be used to instead invoke an external driver executable
+   as a subprocess; it is a thin wrapper around the C API
+   :c:func:`gcc_jit_context_set_bool_use_external_driver`.
+
+   This entrypoint was added in :ref:`LIBGCCJIT_ABI_5`; you can test for
+   its presence using
+
+   .. code-block:: c
+
+      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_set_bool_use_external_driver
+
 Integer options
 ***************
 
@@ -186,3 +233,22 @@ Integer options
   This is a thin wrapper around the C API
   :c:func:`gcc_jit_context_set_int_option`; the options have the same
   meaning.
+
+Additional command-line options
+*******************************
+
+.. function:: void \
+              gccjit::context::add_command_line_option (const char *optname)
+
+   Add an arbitrary gcc command-line option to the context for use
+   when compiling.
+
+   This is a thin wrapper around the C API
+   :c:func:`gcc_jit_context_add_command_line_option`.
+
+   This entrypoint was added in :ref:`LIBGCCJIT_ABI_1`; you can test for
+   its presence using
+
+   .. code-block:: c
+
+      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_add_command_line_option

@@ -1,5 +1,5 @@
 /* VMS specific, C compiler specific functions.
-   Copyright (C) 2011-2014 Free Software Foundation, Inc.
+   Copyright (C) 2011-2015 Free Software Foundation, Inc.
    Contributed by Tristan Gingold (gingold@adacore.com).
 
 This file is part of GCC.
@@ -22,16 +22,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tm.h"
-#include "cpplib.h"
 #include "tree.h"
-#include "c-family/c-pragma.h"
 #include "c-family/c-common.h"
 #include "c/c-tree.h"
-#include "toplev.h"
-#include "ggc.h"
 #include "tm_p.h"
+#include "c-family/c-pragma.h"
+#include "toplev.h"
 #include "incpath.h"
-#include "diagnostic.h"
 
 /* '#pragma __nostandard' is simply ignored.  */
 

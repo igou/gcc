@@ -7,6 +7,7 @@
 
 /* { dg-do run } */
 /* { dg-options "-O -fno-pic" } */
+/* { dg-require-effective-target nonlocal_goto } */
 
 extern void abort (void);
 
@@ -79,6 +80,8 @@ extern void abort (void);
 #elif defined(__v850)
 /* No pic register.  */
 #elif defined(__vax__)
+/* No pic register.  */
+#elif defined(__VISIUM__)
 /* No pic register.  */
 #elif defined(__xstormy16__)
 /* No pic register.  */

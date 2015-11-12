@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on the Synopsys DesignWare ARC cpu.
-   Copyright (C) 1994-2014 Free Software Foundation, Inc.
+   Copyright (C) 1994-2015 Free Software Foundation, Inc.
 
    Sources derived from work done by Sankhya Technologies (www.sankhya.com) on
    behalf of Synopsys Inc.
@@ -31,59 +31,38 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
+#include "target.h"
+#include "rtl.h"
 #include "tree.h"
+#include "cfghooks.h"
+#include "df.h"
+#include "tm_p.h"
+#include "stringpool.h"
+#include "optabs.h"
+#include "regs.h"
+#include "emit-rtl.h"
+#include "recog.h"
+#include "diagnostic.h"
+#include "fold-const.h"
 #include "varasm.h"
 #include "stor-layout.h"
-#include "stringpool.h"
 #include "calls.h"
-#include "rtl.h"
-#include "regs.h"
-#include "hard-reg-set.h"
-#include "real.h"
-#include "insn-config.h"
-#include "conditions.h"
-#include "insn-flags.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "toplev.h"
-#include "ggc.h"
-#include "tm_p.h"
-#include "target.h"
 #include "output.h"
 #include "insn-attr.h"
 #include "flags.h"
+#include "explow.h"
 #include "expr.h"
-#include "recog.h"
-#include "debug.h"
-#include "diagnostic.h"
-#include "insn-codes.h"
 #include "langhooks.h"
-#include "optabs.h"
 #include "tm-constrs.h"
 #include "reload.h" /* For operands_match_p */
-#include "dominance.h"
-#include "cfg.h"
 #include "cfgrtl.h"
-#include "cfganal.h"
-#include "lcm.h"
-#include "cfgbuild.h"
-#include "cfgcleanup.h"
-#include "predict.h"
-#include "basic-block.h"
-#include "df.h"
 #include "tree-pass.h"
 #include "context.h"
-#include "pass_manager.h"
-#include "wide-int.h"
 #include "builtins.h"
 #include "rtl-iter.h"
 
-/* Which cpu we're compiling for (A5, ARC600, ARC601, ARC700).  */
+/* Which cpu we're compiling for (ARC600, ARC601, ARC700).  */
 static const char *arc_cpu_string = "";
 
 /* ??? Loads can handle any constant, stores can only handle small ones.  */
@@ -611,10 +590,26 @@ arc_sched_adjust_priority (rtx_insn *insn, int priority)
   return priority;
 }
 
+/* For ARC base register + offset addressing, the validity of the
+   address is mode-dependent for most of the offset range, as the
+   offset can be scaled by the access size.
+   We don't expose these as mode-dependent addresses in the
+   mode_dependent_address_p target hook, because that would disable
+   lots of optimizations, and most uses of these addresses are for 32
+   or 64 bit accesses anyways, which are fine.
+   However, that leaves some addresses for 8 / 16 bit values not
+   properly reloaded by the generic code, which is why we have to
+   schedule secondary reloads for these.  */
+
 static reg_class_t
-arc_secondary_reload (bool in_p, rtx x, reg_class_t cl, machine_mode,
-		      secondary_reload_info *)
+arc_secondary_reload (bool in_p,
+		      rtx x,
+		      reg_class_t cl,
+		      machine_mode mode,
+		      secondary_reload_info *sri)
 {
+  enum rtx_code code = GET_CODE (x);
+
   if (cl == DOUBLE_REGS)
     return GENERAL_REGS;
 
@@ -622,7 +617,84 @@ arc_secondary_reload (bool in_p, rtx x, reg_class_t cl, machine_mode,
   if ((cl == LPCOUNT_REG || cl == WRITABLE_CORE_REGS)
       && in_p && MEM_P (x))
     return GENERAL_REGS;
+
+ /* If we have a subreg (reg), where reg is a pseudo (that will end in
+    a memory location), then we may need a scratch register to handle
+    the fp/sp+largeoffset address.  */
+  if (code == SUBREG)
+    {
+      rtx addr = NULL_RTX;
+      x = SUBREG_REG (x);
+
+      if (REG_P (x))
+	{
+	  int regno = REGNO (x);
+	  if (regno >= FIRST_PSEUDO_REGISTER)
+	    regno = reg_renumber[regno];
+
+	  if (regno != -1)
+	    return NO_REGS;
+
+	  /* It is a pseudo that ends in a stack location.  */
+	  if (reg_equiv_mem (REGNO (x)))
+	    {
+	      /* Get the equivalent address and check the range of the
+		 offset.  */
+	      rtx mem = reg_equiv_mem (REGNO (x));
+	      addr = find_replacement (&XEXP (mem, 0));
+	    }
+	}
+      else
+	{
+	  gcc_assert (MEM_P (x));
+	  addr = XEXP (x, 0);
+	  addr = simplify_rtx (addr);
+	}
+      if (addr && GET_CODE (addr) == PLUS
+	  && CONST_INT_P (XEXP (addr, 1))
+	  && (!RTX_OK_FOR_OFFSET_P (mode, XEXP (addr, 1))))
+	{
+	  switch (mode)
+	    {
+	    case QImode:
+	      sri->icode =
+		in_p ? CODE_FOR_reload_qi_load : CODE_FOR_reload_qi_store;
+	      break;
+	    case HImode:
+	      sri->icode =
+		in_p ? CODE_FOR_reload_hi_load : CODE_FOR_reload_hi_store;
+	      break;
+	    default:
+	      break;
+	    }
+	}
+    }
   return NO_REGS;
+}
+
+/* Convert reloads using offsets that are too large to use indirect
+   addressing.  */
+
+void
+arc_secondary_reload_conv (rtx reg, rtx mem, rtx scratch, bool store_p)
+{
+  rtx addr;
+
+  gcc_assert (GET_CODE (mem) == MEM);
+  addr = XEXP (mem, 0);
+
+  /* Large offset: use a move.  FIXME: ld ops accepts limms as
+     offsets.  Hence, the following move insn is not required.  */
+  emit_move_insn (scratch, addr);
+  mem = replace_equiv_address_nv (mem, scratch);
+
+  /* Now create the move.  */
+  if (store_p)
+    emit_insn (gen_rtx_SET (mem, reg));
+  else
+    emit_insn (gen_rtx_SET (reg, mem));
+
+  return;
 }
 
 static unsigned arc_ifcvt (void);
@@ -708,27 +780,35 @@ arc_init (void)
 {
   enum attr_tune tune_dflt = TUNE_NONE;
 
-  if (TARGET_A5)
+  switch (arc_cpu)
     {
-      arc_cpu_string = "A5";
-    }
-  else if (TARGET_ARC600)
-    {
+    case PROCESSOR_ARC600:
       arc_cpu_string = "ARC600";
       tune_dflt = TUNE_ARC600;
-    }
-  else if (TARGET_ARC601)
-    {
+      break;
+
+    case PROCESSOR_ARC601:
       arc_cpu_string = "ARC601";
       tune_dflt = TUNE_ARC600;
-    }
-  else if (TARGET_ARC700)
-    {
+      break;
+
+    case PROCESSOR_ARC700:
       arc_cpu_string = "ARC700";
       tune_dflt = TUNE_ARC700_4_2_STD;
+      break;
+
+    case PROCESSOR_ARCEM:
+      arc_cpu_string = "EM";
+      break;
+
+    case PROCESSOR_ARCHS:
+      arc_cpu_string = "HS";
+      break;
+
+    default:
+      gcc_unreachable ();
     }
-  else
-    gcc_unreachable ();
+
   if (arc_tune == TUNE_NONE)
     arc_tune = tune_dflt;
   /* Note: arc_multcost is only used in rtx_cost if speed is true.  */
@@ -761,16 +841,16 @@ arc_init (void)
 	break;
       }
 
-  /* Support mul64 generation only for A5 and ARC600.  */
-  if (TARGET_MUL64_SET && TARGET_ARC700)
-      error ("-mmul64 not supported for ARC700");
+  /* Support mul64 generation only for ARC600.  */
+  if (TARGET_MUL64_SET && (!TARGET_ARC600_FAMILY))
+      error ("-mmul64 not supported for ARC700 or ARCv2");
 
-  /* MPY instructions valid only for ARC700.  */
-  if (TARGET_NOMPY_SET && !TARGET_ARC700)
-      error ("-mno-mpy supported only for ARC700");
+  /* MPY instructions valid only for ARC700 or ARCv2.  */
+  if (TARGET_NOMPY_SET && TARGET_ARC600_FAMILY)
+      error ("-mno-mpy supported only for ARC700 or ARCv2");
 
   /* mul/mac instructions only for ARC600.  */
-  if (TARGET_MULMAC_32BY16_SET && !(TARGET_ARC600 || TARGET_ARC601))
+  if (TARGET_MULMAC_32BY16_SET && (!TARGET_ARC600_FAMILY))
       error ("-mmul32x16 supported only for ARC600 or ARC601");
 
   if (!TARGET_DPFP && TARGET_DPFP_DISABLE_LRSR)
@@ -782,18 +862,25 @@ arc_init (void)
     error ("FPX fast and compact options cannot be specified together");
 
   /* FPX-2. No fast-spfp for arc600 or arc601.  */
-  if (TARGET_SPFP_FAST_SET && (TARGET_ARC600 || TARGET_ARC601))
+  if (TARGET_SPFP_FAST_SET && TARGET_ARC600_FAMILY)
     error ("-mspfp_fast not available on ARC600 or ARC601");
 
   /* FPX-3. No FPX extensions on pre-ARC600 cores.  */
   if ((TARGET_DPFP || TARGET_SPFP)
-      && !(TARGET_ARC600 || TARGET_ARC601 || TARGET_ARC700))
+      && !TARGET_ARCOMPACT_FAMILY)
     error ("FPX extensions not available on pre-ARC600 cores");
 
+  /* Only selected multiplier configurations are available for HS.  */
+  if (TARGET_HS && ((arc_mpy_option > 2 && arc_mpy_option < 7)
+		    || (arc_mpy_option == 1)))
+    error ("This multiplier configuration is not available for HS cores");
+
   /* Warn for unimplemented PIC in pre-ARC700 cores, and disable flag_pic.  */
-  if (flag_pic && !TARGET_ARC700)
+  if (flag_pic && TARGET_ARC600_FAMILY)
     {
-      warning (DK_WARNING, "PIC is not supported for %s. Generating non-PIC code only..", arc_cpu_string);
+      warning (DK_WARNING,
+	       "PIC is not supported for %s. Generating non-PIC code only..",
+	       arc_cpu_string);
       flag_pic = 0;
     }
 
@@ -807,6 +894,8 @@ arc_init (void)
   arc_punct_chars['!'] = 1;
   arc_punct_chars['^'] = 1;
   arc_punct_chars['&'] = 1;
+  arc_punct_chars['+'] = 1;
+  arc_punct_chars['_'] = 1;
 
   if (optimize > 1 && !TARGET_NO_COND_EXEC)
     {
@@ -850,7 +939,7 @@ arc_override_options (void)
   if (flag_no_common == 255)
     flag_no_common = !TARGET_NO_SDATA_SET;
 
-  /* TARGET_COMPACT_CASESI needs the "q" register class.  */ \
+  /* TARGET_COMPACT_CASESI needs the "q" register class.  */
   if (TARGET_MIXED_CODE)
     TARGET_Q_CLASS = 1;
   if (!TARGET_Q_CLASS)
@@ -1223,6 +1312,8 @@ arc_init_reg_tables (void)
   char rname57[5] = "r57";
   char rname58[5] = "r58";
   char rname59[5] = "r59";
+  char rname29[7] = "ilink1";
+  char rname30[7] = "ilink2";
 
 static void
 arc_conditional_register_usage (void)
@@ -1230,6 +1321,14 @@ arc_conditional_register_usage (void)
   int regno;
   int i;
   int fix_start = 60, fix_end = 55;
+
+  if (TARGET_V2)
+    {
+      /* For ARCv2 the core register set is changed.  */
+      strcpy (rname29, "ilink");
+      strcpy (rname30, "r30");
+      fixed_regs[30] = call_used_regs[30] = 1;
+   }
 
   if (TARGET_MUL64_SET)
     {
@@ -1286,7 +1385,7 @@ arc_conditional_register_usage (void)
 	   i <= ARC_LAST_SIMD_DMA_CONFIG_REG; i++)
 	reg_alloc_order [i] = i;
     }
-  /* For Arctangent-A5 / ARC600, lp_count may not be read in an instruction
+  /* For ARC600, lp_count may not be read in an instruction
      following immediately after another one setting it to a new value.
      There was some discussion on how to enforce scheduling constraints for
      processors with missing interlocks on the gcc mailing list:
@@ -1296,7 +1395,7 @@ arc_conditional_register_usage (void)
      machine_dependent_reorg.  */
   if (TARGET_ARC600)
     CLEAR_HARD_REG_BIT (reg_class_contents[SIBCALL_REGS], LP_COUNT);
-  else if (!TARGET_ARC700)
+  else if (!TARGET_LP_WR_INTERLOCK)
     fixed_regs[LP_COUNT] = 1;
   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
     if (!call_used_regs[regno])
@@ -1304,7 +1403,7 @@ arc_conditional_register_usage (void)
   for (regno = 32; regno < 60; regno++)
     if (!fixed_regs[regno])
       SET_HARD_REG_BIT (reg_class_contents[WRITABLE_CORE_REGS], regno);
-  if (TARGET_ARC700)
+  if (!TARGET_ARC600_FAMILY)
     {
       for (regno = 32; regno <= 60; regno++)
 	CLEAR_HARD_REG_BIT (reg_class_contents[CHEAP_CORE_REGS], regno);
@@ -1338,7 +1437,7 @@ arc_conditional_register_usage (void)
 	  = (fixed_regs[i]
 	     ? (TEST_HARD_REG_BIT (reg_class_contents[CHEAP_CORE_REGS], i)
 		? CHEAP_CORE_REGS : ALL_CORE_REGS)
-	     : ((TARGET_ARC700
+	     : (((!TARGET_ARC600_FAMILY)
 		 && TEST_HARD_REG_BIT (reg_class_contents[CHEAP_CORE_REGS], i))
 		? CHEAP_CORE_REGS : WRITABLE_CORE_REGS));
       else
@@ -1356,7 +1455,8 @@ arc_conditional_register_usage (void)
 
   /* Handle Special Registers.  */
   arc_regno_reg_class[29] = LINK_REGS; /* ilink1 register.  */
-  arc_regno_reg_class[30] = LINK_REGS; /* ilink2 register.  */
+  if (!TARGET_V2)
+    arc_regno_reg_class[30] = LINK_REGS; /* ilink2 register.  */
   arc_regno_reg_class[31] = LINK_REGS; /* blink register.  */
   arc_regno_reg_class[60] = LPCOUNT_REG;
   arc_regno_reg_class[61] = NO_REGS;      /* CC_REG: must be NO_REGS.  */
@@ -1438,13 +1538,23 @@ arc_handle_interrupt_attribute (tree *, tree name, tree args, int,
       *no_add_attrs = true;
     }
   else if (strcmp (TREE_STRING_POINTER (value), "ilink1")
-	   && strcmp (TREE_STRING_POINTER (value), "ilink2"))
+	   && strcmp (TREE_STRING_POINTER (value), "ilink2")
+	   && !TARGET_V2)
     {
       warning (OPT_Wattributes,
 	       "argument of %qE attribute is not \"ilink1\" or \"ilink2\"",
 	       name);
       *no_add_attrs = true;
     }
+  else if (TARGET_V2
+	   && strcmp (TREE_STRING_POINTER (value), "ilink"))
+    {
+      warning (OPT_Wattributes,
+	       "argument of %qE attribute is not \"ilink\"",
+	       name);
+      *no_add_attrs = true;
+    }
+
   return NULL_TREE;
 }
 
@@ -1571,7 +1681,7 @@ gen_compare_reg (rtx comparison, machine_mode omode)
       }
 
       if (mode != CC_FPXmode)
-	emit_insn (gen_rtx_SET (VOIDmode, cc_reg,
+	emit_insn (gen_rtx_SET (cc_reg,
 				gen_rtx_COMPARE (mode,
 						 gen_rtx_REG (CC_FPXmode, 61),
 						 const0_rtx)));
@@ -1608,8 +1718,7 @@ gen_compare_reg (rtx comparison, machine_mode omode)
       emit_insn (gen_cmp_float (cc_reg, gen_rtx_COMPARE (mode, op0, op1)));
     }
   else
-    emit_insn (gen_rtx_SET (omode, cc_reg,
-			    gen_rtx_COMPARE (mode, x, y)));
+    emit_insn (gen_rtx_SET (cc_reg, gen_rtx_COMPARE (mode, x, y)));
   return gen_rtx_fmt_ee (code, omode, cc_reg, const0_rtx);
 }
 
@@ -1765,7 +1874,7 @@ frame_insn (rtx x)
 static rtx
 frame_move (rtx dst, rtx src)
 {
-  return frame_insn (gen_rtx_SET (VOIDmode, dst, src));
+  return frame_insn (gen_rtx_SET (dst, src));
 }
 
 /* Like frame_move, but add a REG_INC note for REG if ADDR contains an
@@ -1957,7 +2066,8 @@ arc_compute_function_type (struct function *fun)
 	{
 	  tree value = TREE_VALUE (args);
 
-	  if (!strcmp (TREE_STRING_POINTER (value), "ilink1"))
+	  if (!strcmp (TREE_STRING_POINTER (value), "ilink1")
+	      || !strcmp (TREE_STRING_POINTER (value), "ilink"))
 	    fn_type = ARC_FUNCTION_ILINK1;
 	  else if (!strcmp (TREE_STRING_POINTER (value), "ilink2"))
 	    fn_type = ARC_FUNCTION_ILINK2;
@@ -2100,7 +2210,7 @@ arc_compute_frame_size (int size)	/* size = # of var. bytes allocated.  */
   total_size = ARC_STACK_ALIGN (total_size);
 
   /* Compute offset of register save area from stack pointer:
-     A5 Frame: pretend_size <blink> reg_size <fp> var_size args_size <--sp
+     Frame: pretend_size <blink> reg_size <fp> var_size args_size <--sp
   */
   reg_offset = (total_size - (pretend_size + reg_size + extra_size)
 		+ (frame_pointer_needed ? 4 : 0));
@@ -2179,9 +2289,9 @@ arc_save_restore (rtx base_reg,
 		= gen_frame_mem (SImode, plus_constant (Pmode, base_reg, off));
 
 	      if (epilogue_p)
-		XVECEXP (insn, 0, i) = gen_rtx_SET (VOIDmode, reg, mem);
+		XVECEXP (insn, 0, i) = gen_rtx_SET (reg, mem);
 	      else
-		XVECEXP (insn, 0, i) = gen_rtx_SET (VOIDmode, mem, reg);
+		XVECEXP (insn, 0, i) = gen_rtx_SET (mem, reg);
 	      gmask = gmask & ~(1L << r);
 	    }
 	  if (epilogue_p == 2)
@@ -2223,10 +2333,10 @@ arc_save_restore (rtx base_reg,
     {
       rtx r12 = gen_rtx_REG (Pmode, 12);
 
-      frame_insn (gen_rtx_SET (VOIDmode, r12, GEN_INT (offset)));
+      frame_insn (gen_rtx_SET (r12, GEN_INT (offset)));
       XVECEXP (sibthunk_insn, 0, 0) = ret_rtx;
       XVECEXP (sibthunk_insn, 0, 1)
-	= gen_rtx_SET (VOIDmode, stack_pointer_rtx,
+	= gen_rtx_SET (stack_pointer_rtx,
 		       gen_rtx_PLUS (Pmode, stack_pointer_rtx, r12));
       sibthunk_insn = emit_jump_insn (sibthunk_insn);
       RTX_FRAME_RELATED_P (sibthunk_insn) = 1;
@@ -2538,7 +2648,7 @@ arc_finalize_pic (void)
   pat = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, pat), ARC_UNSPEC_GOT);
   pat = gen_rtx_CONST (Pmode, pat);
 
-  pat = gen_rtx_SET (VOIDmode, baseptr_rtx, pat);
+  pat = gen_rtx_SET (baseptr_rtx, pat);
 
   emit_insn (pat);
 }
@@ -2955,19 +3065,22 @@ arc_print_operand (FILE *file, rtx x, int code)
 	      || GET_CODE (XEXP (x, 0)) == POST_INC
 	      || GET_CODE (XEXP (x, 0)) == POST_DEC
 	      || GET_CODE (XEXP (x, 0)) == POST_MODIFY)
-	    output_address (plus_constant (Pmode, XEXP (XEXP (x, 0), 0), 4));
+	    output_address (VOIDmode,
+			    plus_constant (Pmode, XEXP (XEXP (x, 0), 0), 4));
 	  else if (output_scaled)
 	    {
 	      rtx addr = XEXP (x, 0);
 	      int size = GET_MODE_SIZE (GET_MODE (x));
 
-	      output_address (plus_constant (Pmode, XEXP (addr, 0),
+	      output_address (VOIDmode,
+			      plus_constant (Pmode, XEXP (addr, 0),
 					     ((INTVAL (XEXP (addr, 1)) + 4)
 					      >> (size == 2 ? 1 : 2))));
 	      output_scaled = 0;
 	    }
 	  else
-	    output_address (plus_constant (Pmode, XEXP (x, 0), 4));
+	    output_address (VOIDmode,
+			    plus_constant (Pmode, XEXP (x, 0), 4));
 	  fputc (']', file);
 	}
       else
@@ -3138,6 +3251,18 @@ arc_print_operand (FILE *file, rtx x, int code)
       if (TARGET_ANNOTATE_ALIGN && cfun->machine->size_reason)
 	fprintf (file, "; unalign: %d", cfun->machine->unalign);
       return;
+    case '+':
+      if (TARGET_V2)
+	fputs ("m", file);
+      else
+	fputs ("h", file);
+      return;
+    case '_':
+      if (TARGET_V2)
+	fputs ("h", file);
+      else
+	fputs ("w", file);
+      return;
     default :
       /* Unknown flag.  */
       output_operand_lossage ("invalid operand output code");
@@ -3158,28 +3283,31 @@ arc_print_operand (FILE *file, rtx x, int code)
 	switch (GET_CODE (addr))
 	  {
 	  case PRE_INC: case POST_INC:
-	    output_address (plus_constant (Pmode, XEXP (addr, 0), size)); break;
+	    output_address (VOIDmode,
+			    plus_constant (Pmode, XEXP (addr, 0), size)); break;
 	  case PRE_DEC: case POST_DEC:
-	    output_address (plus_constant (Pmode, XEXP (addr, 0), -size));
+	    output_address (VOIDmode,
+			    plus_constant (Pmode, XEXP (addr, 0), -size));
 	    break;
 	  case PRE_MODIFY: case POST_MODIFY:
-	    output_address (XEXP (addr, 1)); break;
+	    output_address (VOIDmode, XEXP (addr, 1)); break;
 	  case PLUS:
 	    if (output_scaled)
 	      {
-		output_address (plus_constant (Pmode, XEXP (addr, 0),
+		output_address (VOIDmode,
+				plus_constant (Pmode, XEXP (addr, 0),
 					       (INTVAL (XEXP (addr, 1))
 						>> (size == 2 ? 1 : 2))));
 		output_scaled = 0;
 	      }
 	    else
-	      output_address (addr);
+	      output_address (VOIDmode, addr);
 	    break;
 	  default:
 	    if (flag_pic && CONSTANT_ADDRESS_P (addr))
 	      arc_output_pic_addr_const (file, addr, code);
 	    else
-	      output_address (addr);
+	      output_address (VOIDmode, addr);
 	    break;
 	  }
 	fputc (']', file);
@@ -3189,11 +3317,9 @@ arc_print_operand (FILE *file, rtx x, int code)
       /* We handle SFmode constants here as output_addr_const doesn't.  */
       if (GET_MODE (x) == SFmode)
 	{
-	  REAL_VALUE_TYPE d;
 	  long l;
 
-	  REAL_VALUE_FROM_CONST_DOUBLE (d, x);
-	  REAL_VALUE_TO_TARGET_SINGLE (d, l);
+	  REAL_VALUE_TO_TARGET_SINGLE (*CONST_DOUBLE_REAL_VALUE (x), l);
 	  fprintf (file, "0x%08lx", l);
 	  break;
 	}
@@ -3267,7 +3393,7 @@ arc_print_operand_address (FILE *file , rtx addr)
 	gcc_assert (GET_CODE (XEXP (c, 0)) == SYMBOL_REF);
 	gcc_assert (GET_CODE (XEXP (c, 1)) == CONST_INT);
 
-	output_address(XEXP(addr,0));
+	output_address (VOIDmode, XEXP (addr, 0));
 
 	break;
       }
@@ -4116,9 +4242,11 @@ static void arc_file_start (void)
    scanned.  In either case, *TOTAL contains the cost result.  */
 
 static bool
-arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
-	       int *total, bool speed)
+arc_rtx_costs (rtx x, machine_mode mode, int outer_code,
+	       int opno ATTRIBUTE_UNUSED, int *total, bool speed)
 {
+  int code = GET_CODE (x);
+
   switch (code)
     {
       /* Small integers are as cheap as registers.  */
@@ -4210,7 +4338,8 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
 	  if (CONSTANT_P (XEXP (x, 0)))
 	    {
 	      *total += (COSTS_N_INSNS (2)
-			 + rtx_cost (XEXP (x, 1), (enum rtx_code) code, 0, speed));
+			 + rtx_cost (XEXP (x, 1), mode, (enum rtx_code) code,
+				     0, speed));
 	      return true;
 	    }
 	  *total = COSTS_N_INSNS (1);
@@ -4243,7 +4372,7 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
 	*total= arc_multcost;
       /* We do not want synth_mult sequences when optimizing
 	 for size.  */
-      else if (TARGET_MUL64_SET || (TARGET_ARC700 && !TARGET_NOMPY_SET))
+      else if (TARGET_MUL64_SET || TARGET_ARC700_MPY)
 	*total = COSTS_N_INSNS (1);
       else
 	*total = COSTS_N_INSNS (2);
@@ -4252,8 +4381,8 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
       if (GET_CODE (XEXP (x, 0)) == MULT
 	  && _2_4_8_operand (XEXP (XEXP (x, 0), 1), VOIDmode))
 	{
-	  *total += (rtx_cost (XEXP (x, 1), PLUS, 0, speed)
-		     + rtx_cost (XEXP (XEXP (x, 0), 0), PLUS, 1, speed));
+	  *total += (rtx_cost (XEXP (x, 1), mode, PLUS, 0, speed)
+		     + rtx_cost (XEXP (XEXP (x, 0), 0), mode, PLUS, 1, speed));
 	  return true;
 	}
       return false;
@@ -4261,8 +4390,8 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
       if (GET_CODE (XEXP (x, 1)) == MULT
 	  && _2_4_8_operand (XEXP (XEXP (x, 1), 1), VOIDmode))
 	{
-	  *total += (rtx_cost (XEXP (x, 0), PLUS, 0, speed)
-		     + rtx_cost (XEXP (XEXP (x, 1), 0), PLUS, 1, speed));
+	  *total += (rtx_cost (XEXP (x, 0), mode, PLUS, 0, speed)
+		     + rtx_cost (XEXP (XEXP (x, 1), 0), mode, PLUS, 1, speed));
 	  return true;
 	}
       return false;
@@ -4277,15 +4406,16 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
 	    /* btst / bbit0 / bbit1:
 	       Small integers and registers are free; everything else can
 	       be put in a register.  */
-	    *total = (rtx_cost (XEXP (op0, 0), SET, 1, speed)
-		      + rtx_cost (XEXP (op0, 2), SET, 1, speed));
+	    mode = GET_MODE (XEXP (op0, 0));
+	    *total = (rtx_cost (XEXP (op0, 0), mode, SET, 1, speed)
+		      + rtx_cost (XEXP (op0, 2), mode, SET, 1, speed));
 	    return true;
 	  }
 	if (GET_CODE (op0) == AND && op1 == const0_rtx
 	    && satisfies_constraint_C1p (XEXP (op0, 1)))
 	  {
 	    /* bmsk.f */
-	    *total = rtx_cost (XEXP (op0, 0), SET, 1, speed);
+	    *total = rtx_cost (XEXP (op0, 0), VOIDmode, SET, 1, speed);
 	    return true;
 	  }
 	/* add.f  */
@@ -4294,8 +4424,9 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
 	    /* op0 might be constant, the inside of op1 is rather
 	       unlikely to be so.  So swapping the operands might lower
 	       the cost.  */
-	    *total = (rtx_cost (op0, PLUS, 1, speed)
-		      + rtx_cost (XEXP (op1, 0), PLUS, 0, speed));
+	    mode = GET_MODE (op0);
+	    *total = (rtx_cost (op0, mode, PLUS, 1, speed)
+		      + rtx_cost (XEXP (op1, 0), mode, PLUS, 0, speed));
 	  }
 	return false;
       }
@@ -4310,18 +4441,19 @@ arc_rtx_costs (rtx x, int code, int outer_code, int opno ATTRIBUTE_UNUSED,
 	     be put in a register.  */
 	  rtx op0 = XEXP (x, 0);
 
-	  *total = (rtx_cost (XEXP (op0, 0), SET, 1, speed)
-		    + rtx_cost (XEXP (op0, 2), SET, 1, speed));
+	  mode = GET_MODE (XEXP (op0, 0));
+	  *total = (rtx_cost (XEXP (op0, 0), mode, SET, 1, speed)
+		    + rtx_cost (XEXP (op0, 2), mode, SET, 1, speed));
 	  return true;
 	}
       /* Fall through.  */
     /* scc_insn expands into two insns.  */
     case GTU: case GEU: case LEU:
-      if (GET_MODE (x) == SImode)
+      if (mode == SImode)
 	*total += COSTS_N_INSNS (1);
       return false;
     case LTU: /* might use adc.  */
-      if (GET_MODE (x) == SImode)
+      if (mode == SImode)
 	*total += COSTS_N_INSNS (1) - 1;
       return false;
     default:
@@ -5480,7 +5612,8 @@ check_if_valid_sleep_operand (rtx *operands, int opno)
 	if( UNSIGNED_INT6 (INTVAL (operands[opno])))
 	    return true;
     default:
-	fatal_error("operand for sleep instruction must be an unsigned 6 bit compile-time constant");
+	fatal_error (input_location,
+		     "operand for sleep instruction must be an unsigned 6 bit compile-time constant");
 	break;
     }
   return false;
@@ -5654,7 +5787,7 @@ arc_return_in_memory (const_tree type, const_tree fntype ATTRIBUTE_UNUSED)
   else
     {
       HOST_WIDE_INT size = int_size_in_bytes (type);
-      return (size == -1 || size > 8);
+      return (size == -1 || size > (TARGET_V2 ? 16 : 8));
     }
 }
 
@@ -5752,6 +5885,26 @@ arc_invalid_within_doloop (const rtx_insn *insn)
   return NULL;
 }
 
+/* The same functionality as arc_hazard.  It is called in machine
+   reorg before any other optimization.  Hence, the NOP size is taken
+   into account when doing branch shortening.  */
+
+static void
+workaround_arc_anomaly (void)
+{
+  rtx_insn *insn, *succ0;
+
+  /* For any architecture: call arc_hazard here.  */
+  for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      succ0 = next_real_insn (insn);
+      if (arc_hazard (insn, succ0))
+	{
+	  emit_insn_before (gen_nopv (), succ0);
+	}
+    }
+}
+
 static int arc_reorg_in_progress = 0;
 
 /* ARC's machince specific reorg function.  */
@@ -5764,6 +5917,8 @@ arc_reorg (void)
   rtx pc_target;
   long offset;
   int changed;
+
+  workaround_arc_anomaly ();
 
   cfun->machine->arc_reorg_started = 1;
   arc_reorg_in_progress = 1;
@@ -5926,8 +6081,7 @@ arc_reorg (void)
 	      if (next_active_insn (top_label) == insn)
 		{
 		  rtx lc_set
-		    = gen_rtx_SET (VOIDmode,
-				   XEXP (XVECEXP (PATTERN (lp), 0, 3), 0),
+		    = gen_rtx_SET (XEXP (XVECEXP (PATTERN (lp), 0, 3), 0),
 				   const0_rtx);
 
 		  rtx_insn *lc_set_insn = emit_insn_before (lc_set, insn);
@@ -6032,7 +6186,7 @@ arc_reorg (void)
       cfun->machine->ccfsm_current_insn = NULL_RTX;
 
       if (!INSN_ADDRESSES_SET_P())
-	  fatal_error ("Insn addresses not set after shorten_branches");
+	  fatal_error (input_location, "Insn addresses not set after shorten_branches");
 
       for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
 	{
@@ -6191,7 +6345,7 @@ arc_reorg (void)
 
 		  brcc_insn
 		    = gen_rtx_IF_THEN_ELSE (VOIDmode, op, label, pc_rtx);
-		  brcc_insn = gen_rtx_SET (VOIDmode, pc_rtx, brcc_insn);
+		  brcc_insn = gen_rtx_SET (pc_rtx, brcc_insn);
 		  cc_clob_rtx = gen_rtx_CLOBBER (VOIDmode, cc_clob_rtx);
 		  brcc_insn
 		    = gen_rtx_PARALLEL
@@ -6236,7 +6390,7 @@ arc_reorg (void)
     } while (changed);
 
   if (INSN_ADDRESSES_SET_P())
-    fatal_error ("insn addresses not freed");
+    fatal_error (input_location, "insn addresses not freed");
 
   arc_reorg_in_progress = 0;
 }
@@ -7398,7 +7552,7 @@ arc_output_addsi (rtx *operands, bool cond_p, bool output_p)
       int range_factor = neg_intval & intval;
       int shift;
 
-      if (intval == -1 << 31)
+      if (intval == (HOST_WIDE_INT) (HOST_WIDE_INT_M1U << 31))
 	ADDSI_OUTPUT1 ("bxor%? %0,%1,31");
 
       /* If we can use a straight add / sub instead of a {add,sub}[123] of
@@ -7601,7 +7755,7 @@ prepare_move_operands (rtx *operands, machine_mode mode)
 	     variables.  */
 	  operands[1] = arc_rewrite_small_data (operands[1]);
 
-	  emit_insn (gen_rtx_SET (mode, operands[0],operands[1]));
+	  emit_insn (gen_rtx_SET (operands[0],operands[1]));
 	  /* ??? This note is useless, since it only restates the set itself.
 	     We should rather use the original SYMBOL_REF.  However, there is
 	     the problem that we are lying to the compiler about these
@@ -7673,7 +7827,7 @@ prepare_extend_operands (rtx *operands, enum rtx_code code,
 	 variables.  */
       operands[1]
 	= gen_rtx_fmt_e (code, omode, arc_rewrite_small_data (operands[1]));
-      emit_insn (gen_rtx_SET (omode, operands[0], operands[1]));
+      emit_insn (gen_rtx_SET (operands[0], operands[1]));
       set_unique_reg_note (get_last_insn (), REG_EQUAL, operands[1]);
 
       /* Take care of the REG_EQUAL note that will be attached to mark the
@@ -7774,6 +7928,109 @@ arc600_corereg_hazard (rtx_insn *pred, rtx_insn *succ)
   return 0;
 }
 
+/* Given a rtx, check if it is an assembly instruction or not.  */
+
+static int
+arc_asm_insn_p (rtx x)
+{
+  int i, j;
+
+  if (x == 0)
+    return 0;
+
+  switch (GET_CODE (x))
+    {
+    case ASM_OPERANDS:
+    case ASM_INPUT:
+      return 1;
+
+    case SET:
+      return arc_asm_insn_p (SET_SRC (x));
+
+    case PARALLEL:
+      j = 0;
+      for (i = XVECLEN (x, 0) - 1; i >= 0; i--)
+	j += arc_asm_insn_p (XVECEXP (x, 0, i));
+      if ( j > 0)
+	return 1;
+      break;
+
+    default:
+      break;
+    }
+
+  return 0;
+}
+
+/* We might have a CALL to a non-returning function before a loop end.
+   ??? Although the manual says that's OK (the target is outside the
+   loop, and the loop counter unused there), the assembler barfs on
+   this for ARC600, so we must insert a nop before such a call too.
+   For ARC700, and ARCv2 is not allowed to have the last ZOL
+   instruction a jump to a location where lp_count is modified.  */
+
+static bool
+arc_loop_hazard (rtx_insn *pred, rtx_insn *succ)
+{
+  rtx_insn *jump  = NULL;
+  rtx_insn *label = NULL;
+  basic_block succ_bb;
+
+  if (recog_memoized (succ) != CODE_FOR_doloop_end_i)
+    return false;
+
+  /* Phase 1: ARC600 and ARCv2HS doesn't allow any control instruction
+     (i.e., jump/call) as the last instruction of a ZOL.  */
+  if (TARGET_ARC600 || TARGET_HS)
+    if (JUMP_P (pred) || CALL_P (pred)
+	|| arc_asm_insn_p (PATTERN (pred))
+	|| GET_CODE (PATTERN (pred)) == SEQUENCE)
+      return true;
+
+  /* Phase 2: Any architecture, it is not allowed to have the last ZOL
+     instruction a jump to a location where lp_count is modified.  */
+
+  /* Phase 2a: Dig for the jump instruction.  */
+  if (JUMP_P (pred))
+    jump = pred;
+  else if (GET_CODE (PATTERN (pred)) == SEQUENCE
+	   && JUMP_P (XVECEXP (PATTERN (pred), 0, 0)))
+    jump = as_a <rtx_insn *> XVECEXP (PATTERN (pred), 0, 0);
+  else
+    return false;
+
+  label = JUMP_LABEL_AS_INSN (jump);
+  if (!label)
+    return false;
+
+  /* Phase 2b: Make sure is not a millicode jump.  */
+  if ((GET_CODE (PATTERN (jump)) == PARALLEL)
+      && (XVECEXP (PATTERN (jump), 0, 0) == ret_rtx))
+    return false;
+
+  /* Phase 2c: Make sure is not a simple_return.  */
+  if ((GET_CODE (PATTERN (jump)) == SIMPLE_RETURN)
+      || (GET_CODE (label) == SIMPLE_RETURN))
+    return false;
+
+  /* Pahse 2d: Go to the target of the jump and check for aliveness of
+     LP_COUNT register.  */
+  succ_bb = BLOCK_FOR_INSN (label);
+  if (!succ_bb)
+    {
+      gcc_assert (NEXT_INSN (label));
+      if (NOTE_INSN_BASIC_BLOCK_P (NEXT_INSN (label)))
+	succ_bb = NOTE_BASIC_BLOCK (NEXT_INSN (label));
+      else
+	succ_bb = BLOCK_FOR_INSN (NEXT_INSN (label));
+    }
+
+  if (succ_bb && REGNO_REG_SET_P (df_get_live_out (succ_bb), LP_COUNT))
+    return true;
+
+  return false;
+}
+
 /* For ARC600:
    A write to a core reg greater or equal to 32 must not be immediately
    followed by a use.  Anticipate the length requirement to insert a nop
@@ -7782,19 +8039,16 @@ arc600_corereg_hazard (rtx_insn *pred, rtx_insn *succ)
 int
 arc_hazard (rtx_insn *pred, rtx_insn *succ)
 {
-  if (!TARGET_ARC600)
-    return 0;
   if (!pred || !INSN_P (pred) || !succ || !INSN_P (succ))
     return 0;
-  /* We might have a CALL to a non-returning function before a loop end.
-     ??? Although the manual says that's OK (the target is outside the loop,
-     and the loop counter unused there), the assembler barfs on this, so we
-     must instert a nop before such a call too.  */
-  if (recog_memoized (succ) == CODE_FOR_doloop_end_i
-      && (JUMP_P (pred) || CALL_P (pred)
-	  || GET_CODE (PATTERN (pred)) == SEQUENCE))
+
+  if (arc_loop_hazard (pred, succ))
     return 4;
-  return arc600_corereg_hazard (pred, succ);
+
+  if (TARGET_ARC600)
+    return arc600_corereg_hazard (pred, succ);
+
+  return 0;
 }
 
 /* Return length adjustment for INSN.  */
@@ -8210,7 +8464,7 @@ conditionalize_nonjump (rtx pat, rtx cond, rtx insn, bool annulled)
 	      /* Leave add_n alone - the canonical form is to
 		 have the complex summand first.  */
 	      && REG_P (src0))
-	    pat = gen_rtx_SET (VOIDmode, dst,
+	    pat = gen_rtx_SET (dst,
 			       gen_rtx_fmt_ee (GET_CODE (src), GET_MODE (src),
 					       src1, src0));
 	}
@@ -8352,7 +8606,7 @@ arc_ifcvt (void)
 	  else if (JUMP_P (insn) && ANY_RETURN_P (PATTERN (insn)))
 	    {
 	      pat = gen_rtx_IF_THEN_ELSE (VOIDmode, cond, pat, pc_rtx);
-	      pat = gen_rtx_SET (VOIDmode, pc_rtx, pat);
+	      pat = gen_rtx_SET (pc_rtx, pat);
 	    }
 	  else
 	    gcc_unreachable ();
@@ -8915,7 +9169,7 @@ arc_process_double_reg_moves (rtx *operands)
       if (TARGET_DPFP_DISABLE_LRSR)
 	{
 	  /* gen *movdf_insn_nolrsr */
-	  rtx set = gen_rtx_SET (VOIDmode, dest, src);
+	  rtx set = gen_rtx_SET (dest, src);
 	  rtx use1 = gen_rtx_USE (VOIDmode, const1_rtx);
 	  emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2, set, use1)));
 	}
@@ -8927,12 +9181,10 @@ arc_process_double_reg_moves (rtx *operands)
 	  rtx destLow  = simplify_gen_subreg(SImode, dest, DFmode, 0);
 
 	  /* Produce the two LR insns to get the high and low parts.  */
-	  emit_insn (gen_rtx_SET (VOIDmode,
-				  destHigh,
+	  emit_insn (gen_rtx_SET (destHigh,
 				  gen_rtx_UNSPEC_VOLATILE (Pmode, gen_rtvec (1, src),
 				  VUNSPEC_LR_HIGH)));
-	  emit_insn (gen_rtx_SET (VOIDmode,
-				  destLow,
+	  emit_insn (gen_rtx_SET (destLow,
 				  gen_rtx_UNSPEC_VOLATILE (Pmode, gen_rtvec (1, src),
 				  VUNSPEC_LR)));
 	}
@@ -9029,8 +9281,8 @@ arc_split_move (rtx *operands)
   operands[5-swap] = xop[3];
 
   start_sequence ();
-  emit_insn (gen_rtx_SET (VOIDmode, operands[2], operands[3]));
-  emit_insn (gen_rtx_SET (VOIDmode, operands[4], operands[5]));
+  emit_insn (gen_rtx_SET (operands[2], operands[3]));
+  emit_insn (gen_rtx_SET (operands[4], operands[5]));
   val = get_insns ();
   end_sequence ();
 
@@ -9059,7 +9311,7 @@ arc_regno_use_in (unsigned int regno, rtx x)
   int i, j;
   rtx tem;
 
-  if (REG_P (x) && refers_to_regno_p (regno, regno+1, x, (rtx *) 0))
+  if (REG_P (x) && refers_to_regno_p (regno, x))
     return x;
 
   fmt = GET_RTX_FORMAT (GET_CODE (x));
@@ -9327,7 +9579,9 @@ arc_legitimize_reload_address (rtx *p, machine_mode mode, int opnum,
       if ((scale-1) & offset)
 	scale = 1;
       shift = scale >> 1;
-      offset_base = (offset + (256 << shift)) & (-512 << shift);
+      offset_base
+	= ((offset + (256 << shift))
+	   & ((HOST_WIDE_INT)((unsigned HOST_WIDE_INT) -512 << shift)));
       /* Sometimes the normal form does not suit DImode.  We
 	 could avoid that by using smaller ranges, but that
 	 would give less optimized code when SImode is

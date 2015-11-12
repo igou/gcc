@@ -1,5 +1,5 @@
 /* Target definitions for GCC for Intel 80386 running Solaris 2
-   Copyright (C) 1993-2014 Free Software Foundation, Inc.
+   Copyright (C) 1993-2015 Free Software Foundation, Inc.
    Contributed by Fred Fish (fnf@cygnus.com).
 
 This file is part of GCC.
@@ -86,13 +86,10 @@ along with GCC; see the file COPYING3.  If not see
 #endif
 #endif
 
-#undef  ENDFILE_SPEC
-#define ENDFILE_SPEC \
-  "%{Ofast|ffast-math|funsafe-math-optimizations:crtfastmath.o%s} \
-   %{mpc32:crtprec32.o%s} \
+#define ENDFILE_ARCH_SPEC \
+  "%{mpc32:crtprec32.o%s} \
    %{mpc64:crtprec64.o%s} \
-   %{mpc80:crtprec80.o%s} \
-   crtend.o%s crtn.o%s"
+   %{mpc80:crtprec80.o%s}"
 
 #define SUBTARGET_CPU_EXTRA_SPECS \
   { "cpp_subtarget",	 CPP_SUBTARGET_SPEC },		\

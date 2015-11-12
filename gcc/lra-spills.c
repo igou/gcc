@@ -1,5 +1,5 @@
 /* Change pseudos by memory.
-   Copyright (C) 2010-2014 Free Software Foundation, Inc.
+   Copyright (C) 2010-2015 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -58,33 +58,18 @@ along with GCC; see the file COPYING3.	If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
+#include "target.h"
 #include "rtl.h"
-#include "tm_p.h"
+#include "df.h"
 #include "insn-config.h"
+#include "regs.h"
+#include "ira.h"
 #include "recog.h"
 #include "output.h"
-#include "regs.h"
-#include "hard-reg-set.h"
-#include "flags.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "expr.h"
-#include "predict.h"
-#include "dominance.h"
-#include "cfg.h"
 #include "cfgrtl.h"
-#include "basic-block.h"
-#include "except.h"
-#include "timevar.h"
-#include "target.h"
+#include "lra.h"
 #include "lra-int.h"
-#include "ira.h"
-#include "df.h"
 
 
 /* Max regno at the start of the pass.	*/
@@ -213,14 +198,6 @@ regno_freq_compare (const void *v1p, const void *v2p)
     return diff;
   return regno1 - regno2;
 }
-
-/* Redefine STACK_GROWS_DOWNWARD in terms of 0 or 1.  */
-#ifdef STACK_GROWS_DOWNWARD
-# undef STACK_GROWS_DOWNWARD
-# define STACK_GROWS_DOWNWARD 1
-#else
-# define STACK_GROWS_DOWNWARD 0
-#endif
 
 /* Sort pseudos according to their slots, putting the slots in the order
    that they should be allocated.  Slots with lower numbers have the highest
@@ -445,7 +422,7 @@ remove_pseudos (rtx *loc, rtx_insn *insn)
 	{
 	  rtx x = lra_eliminate_regs_1 (insn, pseudo_slots[i].mem,
 					GET_MODE (pseudo_slots[i].mem),
-					0, false, false, true);
+					false, false, 0, true);
 	  *loc = x != pseudo_slots[i].mem ? x : copy_rtx (x);
 	}
       return;
@@ -733,14 +710,44 @@ lra_final_code_change (void)
 	  lra_insn_recog_data_t id = lra_get_insn_recog_data (insn);
 	  struct lra_static_insn_data *static_id = id->insn_static_data;
 	  bool insn_change_p = false;
-
-	  for (i = id->insn_static_data->n_operands - 1; i >= 0; i--)
-	    if ((DEBUG_INSN_P (insn) || ! static_id->operand[i].is_operator)
-		&& alter_subregs (id->operand_loc[i], ! DEBUG_INSN_P (insn)))
-	      {
-		lra_update_dup (id, i);
-		insn_change_p = true;
-	      }
+	  
+          for (i = id->insn_static_data->n_operands - 1; i >= 0; i--)
+	    {
+	      if (! DEBUG_INSN_P (insn) && static_id->operand[i].is_operator)
+		continue;
+	      
+	      rtx op = *id->operand_loc[i];
+	      
+	      if (static_id->operand[i].type == OP_OUT
+		  && GET_CODE (op) == SUBREG && REG_P (SUBREG_REG (op))
+		  && ! LRA_SUBREG_P (op))
+		{
+		  hard_regno = REGNO (SUBREG_REG (op));
+		  /* We can not always remove sub-registers of
+		     hard-registers as we may lose information that
+		     only a part of registers is changed and
+		     subsequent optimizations may do wrong
+		     transformations (e.g. dead code eliminations).
+		     We can not also keep all sub-registers as the
+		     subsequent optimizations can not handle all such
+		     cases.  Here is a compromise which works.  */
+		  if ((GET_MODE_SIZE (GET_MODE (op))
+		       < GET_MODE_SIZE (GET_MODE (SUBREG_REG (op))))
+		      && (hard_regno_nregs[hard_regno][GET_MODE (SUBREG_REG (op))]
+			  == hard_regno_nregs[hard_regno][GET_MODE (op)])
+#ifdef STACK_REGS
+		      && (hard_regno < FIRST_STACK_REG
+			  || hard_regno > LAST_STACK_REG)
+#endif
+		      )
+		    continue;
+		}
+	      if (alter_subregs (id->operand_loc[i], ! DEBUG_INSN_P (insn)))
+		{
+		  lra_update_dup (id, i);
+		  insn_change_p = true;
+		}
+	    }
 	  if (insn_change_p)
 	    lra_update_operator_dups (id);
 	}

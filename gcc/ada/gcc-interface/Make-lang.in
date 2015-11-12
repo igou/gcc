@@ -174,7 +174,7 @@ else
   # Build is different from host so we are either building a canadian cross
   # or a cross-native compiler. We provide defaults for tools targeting the
   # host platform, but they can be overriden by just setting <tool>_FOR_HOST
-  # variables. 
+  # variables.
   GNATMAKE_FOR_HOST=$(host)-gnatmake
   GNATBIND_FOR_HOST=$(host)-gnatbind
   GNATLINK_FOR_HOST=$(host)-gnatlink
@@ -223,8 +223,8 @@ GCC_LLINK=$(LLINKER) $(GCC_LINKERFLAGS) $(LDFLAGS)
 # Object files for gnat1 from C sources.
 GNAT1_C_OBJS = ada/adadecode.o ada/adaint.o ada/argv.o ada/cio.o \
  ada/cstreams.o ada/env.o ada/init.o ada/initialize.o ada/raise.o \
- ada/seh_init.o ada/targext.o ada/cuintp.o ada/decl.o \
- ada/misc.o ada/utils.o ada/utils2.o ada/trans.o ada/targtyps.o
+ ada/seh_init.o ada/targext.o ada/cuintp.o ada/decl.o ada/rtfinal.o \
+ ada/rtinit.o ada/misc.o ada/utils.o ada/utils2.o ada/trans.o ada/targtyps.o
 
 # Object files from Ada sources that are used by gnat1
 GNAT_ADA_OBJS =	\
@@ -243,6 +243,7 @@ GNAT_ADA_OBJS =	\
  ada/casing.o	\
  ada/checks.o	\
  ada/comperr.o	\
+ ada/contracts.o	\
  ada/csets.o	\
  ada/cstand.o	\
  ada/debug.o	\
@@ -282,6 +283,7 @@ GNAT_ADA_OBJS =	\
  ada/exp_smem.o	\
  ada/exp_strm.o	\
  ada/exp_tss.o	\
+ ada/exp_unst.o \
  ada/exp_util.o	\
  ada/expander.o	\
  ada/fmap.o	\
@@ -297,6 +299,7 @@ GNAT_ADA_OBJS =	\
  ada/g-u3spch.o	\
  ada/get_spark_xrefs.o	\
  ada/get_targ.o	\
+ ada/ghost.o	\
  ada/gnat.o	\
  ada/gnatvsn.o	\
  ada/hostparm.o	\
@@ -513,6 +516,8 @@ GNATBIND_OBJS = \
  ada/raise.o      \
  ada/restrict.o   \
  ada/rident.o     \
+ ada/rtfinal.o    \
+ ada/rtinit.o     \
  ada/s-addope.o   \
  ada/s-assert.o   \
  ada/s-carun8.o   \
@@ -655,7 +660,7 @@ ada.tags: force
 
 # Generate documentation.
 
-doc/gnat_ugn.info: ada/gnat_ugn.texi ada/projects.texi \
+doc/gnat_ugn.info: ada/gnat_ugn.texi \
    $(gcc_docdir)/include/fdl.texi $(gcc_docdir)/include/gcc-common.texi	\
    gcc-vers.texi
 	if [ x$(BUILD_INFO) = xinfo ]; then \
@@ -713,7 +718,7 @@ ada.html:
 
 ada.install-html:
 
-doc/gnat_ugn.dvi: ada/gnat_ugn.texi ada/projects.texi \
+doc/gnat_ugn.dvi: ada/gnat_ugn.texi \
 	$(gcc_docdir)/include/fdl.texi	\
 	$(gcc_docdir)/include/gcc-common.texi gcc-vers.texi
 	$(TEXI2DVI) -c -I $(abs_docdir)/include -o $@ $<
@@ -725,7 +730,7 @@ doc/gnat_rm.dvi: ada/gnat_rm.texi $(gcc_docdir)/include/fdl.texi	\
 doc/gnat-style.dvi: ada/gnat-style.texi $(gcc_docdir)/include/fdl.texi
 	$(TEXI2DVI) -c -I $(abs_docdir)/include -o $@ $<
 
-doc/gnat_ugn.pdf: ada/gnat_ugn.texi ada/projects.texi \
+doc/gnat_ugn.pdf: ada/gnat_ugn.texi \
 	$(gcc_docdir)/include/fdl.texi	\
 	$(gcc_docdir)/include/gcc-common.texi gcc-vers.texi
 	$(TEXI2PDF) -c -I $(abs_docdir)/include -o $@ $<
@@ -807,6 +812,7 @@ ada.mostlyclean:
 	-$(RM) ada/*$(coverageexts)
 	-$(RM) ada/sdefault.adb ada/stamp-sdefault ada/stamp-snames
 	-$(RMDIR) ada/tools
+	-$(RM) gnatbind$(exeext) gnat1$(exeext)
 ada.clean:
 ada.distclean:
 	-$(RM) ada/Makefile
@@ -1021,7 +1027,7 @@ ada_generated_files = ada/sinfo.h ada/einfo.h ada/nmake.adb ada/nmake.ads \
 
 # When building from scratch we don't have dependency files, the only thing
 # we need to ensure is that the generated files are created first.
-$(GNAT1_ADA_OBJS) $(GNATBIND_OBJS): | $(ada_generated_files)
+$(GNAT1_OBJS) $(GNATBIND_OBJS): | $(ada_generated_files)
 
 # Manually include the auto-generated dependencies for the Ada host objects.
 ADA_DEPFILES = $(foreach obj,$(GNAT1_ADA_OBJS) $(GNATBIND_OBJS),\

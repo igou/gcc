@@ -1,5 +1,5 @@
 /* RunTime Type Identification
-   Copyright (C) 1995-2014 Free Software Foundation, Inc.
+   Copyright (C) 1995-2015 Free Software Foundation, Inc.
    Mostly written by Jason Merrill (jason@cygnus.com).
 
 This file is part of GCC.
@@ -20,17 +20,13 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #include "system.h"
-#include "intl.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "tree.h"
+#include "target.h"
+#include "cp-tree.h"
 #include "tm_p.h"
 #include "stringpool.h"
+#include "intl.h"
 #include "stor-layout.h"
-#include "cp-tree.h"
-#include "flags.h"
-#include "convert.h"
-#include "target.h"
 #include "c-family/c-pragma.h"
 
 /* C++ returns type information to the user in struct type_info
@@ -63,7 +59,7 @@ along with GCC; see the file COPYING3.  If not see
    translation, when we are emitting the type info objects.  */
 
 /* Auxiliary data we hold for each type_info derived object we need.  */
-typedef struct GTY (()) tinfo_s {
+struct GTY (()) tinfo_s {
   tree type;  /* The RECORD_TYPE for this type_info object */
 
   tree vtable; /* The VAR_DECL of the vtable.  Only filled at end of
@@ -71,10 +67,10 @@ typedef struct GTY (()) tinfo_s {
 
   tree name;  /* IDENTIFIER_NODE for the ABI specified name of
 		 the type_info derived type.  */
-} tinfo_s;
+};
 
 
-typedef enum tinfo_kind
+enum tinfo_kind
 {
   TK_TYPE_INFO_TYPE,    /* abi::__type_info_pseudo */
   TK_BASE_TYPE,		/* abi::__base_class_type_info */
@@ -88,7 +84,7 @@ typedef enum tinfo_kind
   TK_SI_CLASS_TYPE,	/* abi::__si_class_type_info */
   TK_FIXED		/* end of fixed descriptors. */
   /* ...		   abi::__vmi_type_info<I> */
-} tinfo_kind;
+};
 
 /* Helper macro to get maximum scalar-width of pointer or of the 'long'-type.
    This of interest for llp64 targets.  */
@@ -699,10 +695,12 @@ build_dynamic_cast_1 (tree type, tree expr, tsubst_flags_t complain)
 	  target_type = TYPE_MAIN_VARIANT (TREE_TYPE (type));
 	  static_type = TYPE_MAIN_VARIANT (TREE_TYPE (exprtype));
 	  td2 = get_tinfo_decl (target_type);
-	  mark_used (td2);
+	  if (!mark_used (td2, complain) && !(complain & tf_error))
+	    return error_mark_node;
 	  td2 = cp_build_addr_expr (td2, complain);
 	  td3 = get_tinfo_decl (static_type);
-	  mark_used (td3);
+	  if (!mark_used (td3, complain) && !(complain & tf_error))
+	    return error_mark_node;
 	  td3 = cp_build_addr_expr (td3, complain);
 
 	  /* Determine how T and V are related.  */
@@ -980,6 +978,11 @@ ptr_initializer (tinfo_s *ti, tree target)
 
   if (incomplete)
     flags |= 8;
+  if (tx_safe_fn_type_p (to))
+    {
+      flags |= 0x20;
+      to = tx_unsafe_fn_variant (to);
+    }
   CONSTRUCTOR_APPEND_ELT (v, NULL_TREE, init);
   CONSTRUCTOR_APPEND_ELT (v, NULL_TREE, build_int_cst (NULL_TREE, flags));
   CONSTRUCTOR_APPEND_ELT (v, NULL_TREE,

@@ -134,7 +134,7 @@ func Clean(path string) string {
 	return out.string()
 }
 
-// Split splits path immediately following the final slash.
+// Split splits path immediately following the final slash,
 // separating it into a directory and file name component.
 // If there is no slash path, Split returns an empty dir and
 // file set to path.
@@ -192,7 +192,7 @@ func Base(path string) string {
 	return path
 }
 
-// IsAbs returns true if the path is absolute.
+// IsAbs reports whether the path is absolute.
 func IsAbs(path string) bool {
 	return len(path) > 0 && path[0] == '/'
 }
@@ -206,13 +206,5 @@ func IsAbs(path string) bool {
 // slash.
 func Dir(path string) string {
 	dir, _ := Split(path)
-	dir = Clean(dir)
-	last := len(dir) - 1
-	if last > 0 && dir[last] == '/' {
-		dir = dir[:last]
-	}
-	if dir == "" {
-		dir = "."
-	}
-	return dir
+	return Clean(dir)
 }

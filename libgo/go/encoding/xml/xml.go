@@ -196,6 +196,7 @@ type Decoder struct {
 	ns             map[string]string
 	err            error
 	line           int
+	offset         int64
 	unmarshalDepth int
 }
 
@@ -548,7 +549,6 @@ func (d *Decoder) rawToken() (Token, error) {
 
 	case '?':
 		// <?: Processing instruction.
-		// TODO(rsc): Should parse the <?xml declaration to make sure the version is 1.0.
 		var target string
 		if target, ok = d.name(); !ok {
 			if d.err == nil {
@@ -573,7 +573,13 @@ func (d *Decoder) rawToken() (Token, error) {
 		data = data[0 : len(data)-2] // chop ?>
 
 		if target == "xml" {
-			enc := procInstEncoding(string(data))
+			content := string(data)
+			ver := procInst("version", content)
+			if ver != "" && ver != "1.0" {
+				d.err = fmt.Errorf("xml: unsupported version %q; only version 1.0 is supported", ver)
+				return nil, d.err
+			}
+			enc := procInst("encoding", content)
 			if enc != "" && enc != "utf-8" && enc != "UTF-8" {
 				if d.CharsetReader == nil {
 					d.err = fmt.Errorf("xml: encoding %q declared but Decoder.CharsetReader is nil", enc)
@@ -722,7 +728,7 @@ func (d *Decoder) rawToken() (Token, error) {
 		return nil, d.err
 	}
 
-	attr = make([]Attr, 0, 4)
+	attr = []Attr{}
 	for {
 		d.space()
 		if b, ok = d.mustgetc(); !ok {
@@ -746,7 +752,11 @@ func (d *Decoder) rawToken() (Token, error) {
 
 		n := len(attr)
 		if n >= cap(attr) {
-			nattr := make([]Attr, n, 2*cap(attr))
+			nCap := 2 * cap(attr)
+			if nCap == 0 {
+				nCap = 4
+			}
+			nattr := make([]Attr, n, nCap)
 			copy(nattr, attr)
 			attr = nattr
 		}
@@ -859,7 +869,15 @@ func (d *Decoder) getc() (b byte, ok bool) {
 	if b == '\n' {
 		d.line++
 	}
+	d.offset++
 	return b, true
+}
+
+// InputOffset returns the input stream byte offset of the current decoder position.
+// The offset gives the location of the end of the most recently returned token
+// and the beginning of the next token.
+func (d *Decoder) InputOffset() int64 {
+	return d.offset
 }
 
 // Return saved offset.
@@ -891,6 +909,7 @@ func (d *Decoder) ungetc(b byte) {
 		d.line--
 	}
 	d.nextByte = int(b)
+	d.offset--
 }
 
 var entity = map[string]int{
@@ -1109,12 +1128,12 @@ func (d *Decoder) name() (s string, ok bool) {
 	}
 
 	// Now we check the characters.
-	s = d.buf.String()
-	if !isName([]byte(s)) {
-		d.err = d.syntaxError("invalid XML name: " + s)
+	b := d.buf.Bytes()
+	if !isName(b) {
+		d.err = d.syntaxError("invalid XML name: " + string(b))
 		return "", false
 	}
-	return s, true
+	return string(b), true
 }
 
 // Read a name and append its bytes to d.buf.
@@ -1822,6 +1841,13 @@ var (
 // EscapeText writes to w the properly escaped XML equivalent
 // of the plain text data s.
 func EscapeText(w io.Writer, s []byte) error {
+	return escapeText(w, s, true)
+}
+
+// escapeText writes to w the properly escaped XML equivalent
+// of the plain text data s. If escapeNewline is true, newline
+// characters will be escaped.
+func escapeText(w io.Writer, s []byte, escapeNewline bool) error {
 	var esc []byte
 	last := 0
 	for i := 0; i < len(s); {
@@ -1841,6 +1867,9 @@ func EscapeText(w io.Writer, s []byte) error {
 		case '\t':
 			esc = esc_tab
 		case '\n':
+			if !escapeNewline {
+				continue
+			}
 			esc = esc_nl
 		case '\r':
 			esc = esc_cr
@@ -1911,16 +1940,17 @@ func Escape(w io.Writer, s []byte) {
 	EscapeText(w, s)
 }
 
-// procInstEncoding parses the `encoding="..."` or `encoding='...'`
+// procInst parses the `param="..."` or `param='...'`
 // value out of the provided string, returning "" if not found.
-func procInstEncoding(s string) string {
+func procInst(param, s string) string {
 	// TODO: this parsing is somewhat lame and not exact.
 	// It works for all actual cases, though.
-	idx := strings.Index(s, "encoding=")
+	param = param + "="
+	idx := strings.Index(s, param)
 	if idx == -1 {
 		return ""
 	}
-	v := s[idx+len("encoding="):]
+	v := s[idx+len(param):]
 	if v == "" {
 		return ""
 	}

@@ -1,5 +1,5 @@
 /* Coalesce spilled pseudos.
-   Copyright (C) 2010-2014 Free Software Foundation, Inc.
+   Copyright (C) 2010-2015 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -45,31 +45,15 @@ along with GCC; see the file COPYING3.	If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
 #include "rtl.h"
-#include "tm_p.h"
-#include "insn-config.h"
-#include "recog.h"
-#include "output.h"
-#include "regs.h"
-#include "hard-reg-set.h"
-#include "flags.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "expr.h"
 #include "predict.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "basic-block.h"
-#include "except.h"
-#include "timevar.h"
-#include "ira.h"
-#include "lra-int.h"
 #include "df.h"
+#include "insn-config.h"
+#include "regs.h"
+#include "ira.h"
+#include "recog.h"
+#include "lra-int.h"
 
 /* Arrays whose elements represent the first and the next pseudo
    (regno) in the coalesced pseudos group to which given pseudo (its

@@ -50,15 +50,23 @@ var ServeFileRangeTests = []struct {
 	{r: "bytes=2-", code: StatusPartialContent, ranges: []wantRange{{2, testFileLen}}},
 	{r: "bytes=-5", code: StatusPartialContent, ranges: []wantRange{{testFileLen - 5, testFileLen}}},
 	{r: "bytes=3-7", code: StatusPartialContent, ranges: []wantRange{{3, 8}}},
-	{r: "bytes=20-", code: StatusRequestedRangeNotSatisfiable},
 	{r: "bytes=0-0,-2", code: StatusPartialContent, ranges: []wantRange{{0, 1}, {testFileLen - 2, testFileLen}}},
 	{r: "bytes=0-1,5-8", code: StatusPartialContent, ranges: []wantRange{{0, 2}, {5, 9}}},
 	{r: "bytes=0-1,5-", code: StatusPartialContent, ranges: []wantRange{{0, 2}, {5, testFileLen}}},
 	{r: "bytes=5-1000", code: StatusPartialContent, ranges: []wantRange{{5, testFileLen}}},
 	{r: "bytes=0-,1-,2-,3-,4-", code: StatusOK}, // ignore wasteful range request
-	{r: "bytes=0-" + itoa(testFileLen-2), code: StatusPartialContent, ranges: []wantRange{{0, testFileLen - 1}}},
-	{r: "bytes=0-" + itoa(testFileLen-1), code: StatusPartialContent, ranges: []wantRange{{0, testFileLen}}},
-	{r: "bytes=0-" + itoa(testFileLen), code: StatusPartialContent, ranges: []wantRange{{0, testFileLen}}},
+	{r: "bytes=0-9", code: StatusPartialContent, ranges: []wantRange{{0, testFileLen - 1}}},
+	{r: "bytes=0-10", code: StatusPartialContent, ranges: []wantRange{{0, testFileLen}}},
+	{r: "bytes=0-11", code: StatusPartialContent, ranges: []wantRange{{0, testFileLen}}},
+	{r: "bytes=10-11", code: StatusPartialContent, ranges: []wantRange{{testFileLen - 1, testFileLen}}},
+	{r: "bytes=10-", code: StatusPartialContent, ranges: []wantRange{{testFileLen - 1, testFileLen}}},
+	{r: "bytes=11-", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=11-12", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=12-12", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=11-100", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=12-100", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=100-", code: StatusRequestedRangeNotSatisfiable},
+	{r: "bytes=100-1000", code: StatusRequestedRangeNotSatisfiable},
 }
 
 func TestServeFile(t *testing.T) {
@@ -489,6 +497,7 @@ type fakeFileInfo struct {
 	modtime  time.Time
 	ents     []*fakeFileInfo
 	contents string
+	err      error
 }
 
 func (f *fakeFileInfo) Name() string       { return f.basename }
@@ -540,6 +549,9 @@ func (fs fakeFS) Open(name string) (File, error) {
 	f, ok := fs[name]
 	if !ok {
 		return nil, os.ErrNotExist
+	}
+	if f.err != nil {
+		return nil, f.err
 	}
 	return &fakeFile{ReadSeeker: strings.NewReader(f.contents), fi: f, path: name}, nil
 }
@@ -721,6 +733,34 @@ func TestServeContent(t *testing.T) {
 			wantStatus:      200,
 			wantContentType: "text/css; charset=utf-8",
 		},
+		"range_with_modtime": {
+			file:    "testdata/style.css",
+			modtime: time.Date(2014, 6, 25, 17, 12, 18, 0 /* nanos */, time.UTC),
+			reqHeader: map[string]string{
+				"Range":    "bytes=0-4",
+				"If-Range": "Wed, 25 Jun 2014 17:12:18 GMT",
+			},
+			wantStatus:      StatusPartialContent,
+			wantContentType: "text/css; charset=utf-8",
+			wantLastMod:     "Wed, 25 Jun 2014 17:12:18 GMT",
+		},
+		"range_with_modtime_nanos": {
+			file:    "testdata/style.css",
+			modtime: time.Date(2014, 6, 25, 17, 12, 18, 123 /* nanos */, time.UTC),
+			reqHeader: map[string]string{
+				"Range":    "bytes=0-4",
+				"If-Range": "Wed, 25 Jun 2014 17:12:18 GMT",
+			},
+			wantStatus:      StatusPartialContent,
+			wantContentType: "text/css; charset=utf-8",
+			wantLastMod:     "Wed, 25 Jun 2014 17:12:18 GMT",
+		},
+		"unix_zero_modtime": {
+			content:         strings.NewReader("<html>foo"),
+			modtime:         time.Unix(0, 0),
+			wantStatus:      StatusOK,
+			wantContentType: "text/html; charset=utf-8",
+		},
 	}
 	for testName, tt := range tests {
 		var content io.ReadSeeker
@@ -764,6 +804,31 @@ func TestServeContent(t *testing.T) {
 		if g, e := res.Header.Get("Last-Modified"), tt.wantLastMod; g != e {
 			t.Errorf("test %q: last-modified = %q, want %q", testName, g, e)
 		}
+	}
+}
+
+func TestServeContentErrorMessages(t *testing.T) {
+	defer afterTest(t)
+	fs := fakeFS{
+		"/500": &fakeFileInfo{
+			err: errors.New("random error"),
+		},
+		"/403": &fakeFileInfo{
+			err: &os.PathError{Err: os.ErrPermission},
+		},
+	}
+	ts := httptest.NewServer(FileServer(fs))
+	defer ts.Close()
+	for _, code := range []int{403, 404, 500} {
+		res, err := DefaultClient.Get(fmt.Sprintf("%s/%d", ts.URL, code))
+		if err != nil {
+			t.Errorf("Error fetching /%d: %v", code, err)
+			continue
+		}
+		if res.StatusCode != code {
+			t.Errorf("For /%d, status code = %d; want %d", code, res.StatusCode, code)
+		}
+		res.Body.Close()
 	}
 }
 
@@ -858,6 +923,43 @@ func TestLinuxSendfileChild(*testing.T) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func TestFileServerCleanPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		wantCode int
+		wantOpen []string
+	}{
+		{"/", 200, []string{"/", "/index.html"}},
+		{"/dir", 301, []string{"/dir"}},
+		{"/dir/", 200, []string{"/dir", "/dir/index.html"}},
+	}
+	for _, tt := range tests {
+		var log []string
+		rr := httptest.NewRecorder()
+		req, _ := NewRequest("GET", "http://foo.localhost"+tt.path, nil)
+		FileServer(fileServerCleanPathDir{&log}).ServeHTTP(rr, req)
+		if !reflect.DeepEqual(log, tt.wantOpen) {
+			t.Logf("For %s: Opens = %q; want %q", tt.path, log, tt.wantOpen)
+		}
+		if rr.Code != tt.wantCode {
+			t.Logf("For %s: Response code = %d; want %d", tt.path, rr.Code, tt.wantCode)
+		}
+	}
+}
+
+type fileServerCleanPathDir struct {
+	log *[]string
+}
+
+func (d fileServerCleanPathDir) Open(path string) (File, error) {
+	*(d.log) = append(*(d.log), path)
+	if path == "/" || path == "/dir" || path == "/dir/" {
+		// Just return back something that's a directory.
+		return Dir(".").Open(".")
+	}
+	return nil, os.ErrNotExist
 }
 
 type panicOnSeek struct{ io.ReadSeeker }

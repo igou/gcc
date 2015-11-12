@@ -1,5 +1,5 @@
 /* Induction variable canonicalization and loop peeling.
-   Copyright (C) 2004-2014 Free Software Foundation, Inc.
+   Copyright (C) 2004-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -38,52 +38,29 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
+#include "backend.h"
 #include "tree.h"
-#include "tm_p.h"
-#include "profile.h"
-#include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "basic-block.h"
+#include "gimple.h"
+#include "cfghooks.h"
+#include "tree-pass.h"
+#include "ssa.h"
+#include "cgraph.h"
 #include "gimple-pretty-print.h"
-#include "tree-ssa-alias.h"
-#include "internal-fn.h"
+#include "fold-const.h"
+#include "profile.h"
 #include "gimple-fold.h"
 #include "tree-eh.h"
-#include "gimple-expr.h"
-#include "is-a.h"
-#include "gimple.h"
 #include "gimple-iterator.h"
-#include "gimple-ssa.h"
-#include "hash-map.h"
-#include "plugin-api.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
 #include "tree-cfg.h"
-#include "tree-phinodes.h"
-#include "ssa-iterators.h"
-#include "stringpool.h"
-#include "tree-ssanames.h"
 #include "tree-ssa-loop-manip.h"
 #include "tree-ssa-loop-niter.h"
 #include "tree-ssa-loop.h"
 #include "tree-into-ssa.h"
 #include "cfgloop.h"
-#include "tree-pass.h"
 #include "tree-chrec.h"
 #include "tree-scalar-evolution.h"
 #include "params.h"
-#include "flags.h"
 #include "tree-inline.h"
-#include "target.h"
 #include "tree-cfgcleanup.h"
 #include "builtins.h"
 
@@ -178,7 +155,7 @@ struct loop_size
 /* Return true if OP in STMT will be constant after peeling LOOP.  */
 
 static bool
-constant_after_peeling (tree op, gimple stmt, struct loop *loop)
+constant_after_peeling (tree op, gimple *stmt, struct loop *loop)
 {
   affine_iv iv;
 
@@ -263,7 +240,7 @@ tree_estimate_loop_size (struct loop *loop, edge exit, edge edge_to_cancel, stru
 
       for (gsi = gsi_start_bb (body[i]); !gsi_end_p (gsi); gsi_next (&gsi))
 	{
-	  gimple stmt = gsi_stmt (gsi);
+	  gimple *stmt = gsi_stmt (gsi);
 	  int num = estimate_num_insns (stmt, &eni_size_weights);
 	  bool likely_eliminated = false;
 	  bool likely_eliminated_last = false;
@@ -355,7 +332,7 @@ tree_estimate_loop_size (struct loop *loop, edge exit, edge edge_to_cancel, stru
       basic_block bb = path.pop ();
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
 	{
-	  gimple stmt = gsi_stmt (gsi);
+	  gimple *stmt = gsi_stmt (gsi);
 	  if (gimple_code (stmt) == GIMPLE_CALL)
 	    {
 	      int flags = gimple_call_flags (stmt);
@@ -517,9 +494,9 @@ remove_exits_and_undefined_stmts (struct loop *loop, unsigned int npeeled)
 	  gimple_stmt_iterator gsi = gsi_for_stmt (elt->stmt);
 	  gcall *stmt = gimple_build_call
 	      (builtin_decl_implicit (BUILT_IN_UNREACHABLE), 0);
-
 	  gimple_set_location (stmt, gimple_location (elt->stmt));
 	  gsi_insert_before (&gsi, stmt, GSI_NEW_STMT);
+	  split_block (gimple_bb (stmt), stmt);
 	  changed = true;
 	  if (dump_file && (dump_flags & TDF_DETAILS))
 	    {
@@ -1155,7 +1132,7 @@ canonicalize_induction_variables (void)
   bool irred_invalidated = false;
   bitmap loop_closed_ssa_invalidated = BITMAP_ALLOC (NULL);
 
-  free_numbers_of_iterations_estimates ();
+  free_numbers_of_iterations_estimates (cfun);
   estimate_numbers_of_iterations ();
 
   FOR_EACH_LOOP (loop, LI_FROM_INNERMOST)
@@ -1193,7 +1170,7 @@ static void
 propagate_into_all_uses (tree ssa_name, tree val)
 {
   imm_use_iterator iter;
-  gimple use_stmt;
+  gimple *use_stmt;
 
   FOR_EACH_IMM_USE_STMT (use_stmt, iter, ssa_name)
     {
@@ -1244,7 +1221,7 @@ propagate_constants_for_unrolling (basic_block bb)
   /* Look for assignments to SSA names with constant RHS.  */
   for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi); )
     {
-      gimple stmt = gsi_stmt (gsi);
+      gimple *stmt = gsi_stmt (gsi);
       tree lhs;
 
       if (is_gimple_assign (stmt)
@@ -1343,7 +1320,7 @@ tree_unroll_loops_completely (bool may_increase_size, bool unroll_outer)
       if (loops_state_satisfies_p (LOOP_CLOSED_SSA))
 	loop_closed_ssa_invalidated = BITMAP_ALLOC (NULL);
 
-      free_numbers_of_iterations_estimates ();
+      free_numbers_of_iterations_estimates (cfun);
       estimate_numbers_of_iterations ();
 
       changed = tree_unroll_loops_completely_1 (may_increase_size,
@@ -1393,10 +1370,8 @@ tree_unroll_loops_completely (bool may_increase_size, bool unroll_outer)
 	  /* Clean up the information about numbers of iterations, since
 	     complete unrolling might have invalidated it.  */
 	  scev_reset ();
-#ifdef ENABLE_CHECKING
-	  if (loops_state_satisfies_p (LOOP_CLOSED_SSA))
+	  if (flag_checking && loops_state_satisfies_p (LOOP_CLOSED_SSA))
 	    verify_loop_closed_ssa (true);
-#endif
 	}
       if (loop_closed_ssa_invalidated)
         BITMAP_FREE (loop_closed_ssa_invalidated);
@@ -1549,7 +1524,7 @@ pass_complete_unrolli::execute (function *fun)
     {
       scev_initialize ();
       ret = tree_unroll_loops_completely (optimize >= 3, false);
-      free_numbers_of_iterations_estimates ();
+      free_numbers_of_iterations_estimates (fun);
       scev_finalize ();
     }
   loop_optimizer_finalize ();

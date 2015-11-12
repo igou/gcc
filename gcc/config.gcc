@@ -1,5 +1,5 @@
 # GCC target-specific configuration file.
-# Copyright (C) 1997-2014 Free Software Foundation, Inc.
+# Copyright (C) 1997-2015 Free Software Foundation, Inc.
 
 #This file is part of GCC.
 
@@ -259,7 +259,6 @@ case ${target} in
    arm*-wince-pe*			\
  | arm*-*-ecos-elf			\
  | arm*-*-elf				\
- | arm*-*-freebsd*			\
  | arm*-*-linux*			\
  | arm*-*-uclinux*			\
  | i[34567]86-go32-*			\
@@ -303,7 +302,9 @@ m32c*-*-*)
 aarch64*-*-*)
 	cpu_type=aarch64
 	extra_headers="arm_neon.h arm_acle.h"
-	extra_objs="aarch64-builtins.o aarch-common.o"
+	c_target_objs="aarch64-c.o"
+	cxx_target_objs="aarch64-c.o"
+	extra_objs="aarch64-builtins.o aarch-common.o cortex-a57-fma-steering.o"
 	target_gtfiles="\$(srcdir)/config/aarch64/aarch64-builtins.c"
 	target_has_targetm_common=yes
 	;;
@@ -331,7 +332,6 @@ avr-*-*)
 	cpu_type=avr
 	c_target_objs="avr-c.o"
 	cxx_target_objs="avr-c.o"
-	extra_options="${extra_options} avr/avr-tables.opt"
 	;;
 bfin*-*)
 	cpu_type=bfin
@@ -341,6 +341,9 @@ crisv32-*)
 	;;
 frv*)	cpu_type=frv
 	extra_options="${extra_options} g.opt"
+	;;
+ft32*)	cpu_type=ft32
+	target_has_targetm_common=no
 	;;
 moxie*)	cpu_type=moxie
 	target_has_targetm_common=no
@@ -369,7 +372,7 @@ i[34567]86-*-*)
 		       xsavesintrin.h avx512dqintrin.h avx512bwintrin.h
 		       avx512vlintrin.h avx512vlbwintrin.h avx512vldqintrin.h
 		       avx512ifmaintrin.h avx512ifmavlintrin.h avx512vbmiintrin.h
-		       avx512vbmivlintrin.h clwbintrin.h pcommitintrin.h"
+		       avx512vbmivlintrin.h clwbintrin.h pcommitintrin.h mwaitxintrin.h"
 	;;
 x86_64-*-*)
 	cpu_type=i386
@@ -390,7 +393,7 @@ x86_64-*-*)
 		       xsavesintrin.h avx512dqintrin.h avx512bwintrin.h
 		       avx512vlintrin.h avx512vlbwintrin.h avx512vldqintrin.h
 		       avx512ifmaintrin.h avx512ifmavlintrin.h avx512vbmiintrin.h
-		       avx512vbmivlintrin.h clwbintrin.h pcommitintrin.h"
+		       avx512vbmivlintrin.h clwbintrin.h pcommitintrin.h mwaitxintrin.h"
 	;;
 ia64-*-*)
 	extra_headers=ia64intrin.h
@@ -417,7 +420,8 @@ microblaze*-*-*)
 mips*-*-*)
 	cpu_type=mips
 	extra_headers="loongson.h"
-	extra_options="${extra_options} g.opt mips/mips-tables.opt"
+	extra_objs="frame-header-opt.o"
+	extra_options="${extra_options} g.opt fused-madd.opt mips/mips-tables.opt"
 	;;
 nds32*)
 	cpu_type=nds32
@@ -435,7 +439,7 @@ powerpc*-*-*)
 	cpu_type=rs6000
 	extra_headers="ppc-asm.h altivec.h spe.h ppu_intrinsics.h paired.h spu2vmx.h vec_types.h si2vmx.h htmintrin.h htmxlintrin.h"
 	case x$with_cpu in
-	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[345678]|xpower6x|xrs64a|xcell|xa2|xe500mc64|xe5500|Xe6500)
+	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[3456789]|xpower6x|xrs64a|xcell|xa2|xe500mc64|xe5500|xe6500)
 		cpu_is_64bit=yes
 		;;
 	esac
@@ -456,7 +460,7 @@ spu*-*-*)
 s390*-*-*)
 	cpu_type=s390
 	extra_options="${extra_options} fused-madd.opt"
-	extra_headers="s390intrin.h htmintrin.h htmxlintrin.h"
+	extra_headers="s390intrin.h htmintrin.h htmxlintrin.h vecintrin.h"
 	;;
 # Note the 'l'; we need to be able to match e.g. "shle" or "shl".
 sh[123456789lbe]*-*-* | sh-*-*)
@@ -577,22 +581,22 @@ case ${target} in
 esac
 
 # Common C libraries.
-tm_defines="$tm_defines LIBC_GLIBC=1 LIBC_UCLIBC=2 LIBC_BIONIC=3"
+tm_defines="$tm_defines LIBC_GLIBC=1 LIBC_UCLIBC=2 LIBC_BIONIC=3 LIBC_MUSL=4"
 
 # 32-bit x86 processors supported by --with-arch=.  Each processor
 # MUST be separated by exactly one space.
 x86_archs="athlon athlon-4 athlon-fx athlon-mp athlon-tbird \
 athlon-xp k6 k6-2 k6-3 geode c3 c3-2 winchip-c6 winchip2 i386 i486 \
 i586 i686 pentium pentium-m pentium-mmx pentium2 pentium3 pentium3m \
-pentium4 pentium4m pentiumpro prescott"
+pentium4 pentium4m pentiumpro prescott lakemont"
 
 # 64-bit x86 processors supported by --with-arch=.  Each processor
 # MUST be separated by exactly one space.
 x86_64_archs="amdfam10 athlon64 athlon64-sse3 barcelona bdver1 bdver2 \
-bdver3 bdver4 btver1 btver2 k8 k8-sse3 opteron opteron-sse3 nocona \
+bdver3 bdver4 znver1 btver1 btver2 k8 k8-sse3 opteron opteron-sse3 nocona \
 core2 corei7 corei7-avx core-avx-i core-avx2 atom slm nehalem westmere \
-sandybridge ivybridge haswell broadwell bonnell silvermont knl x86-64 \
-native"
+sandybridge ivybridge haswell broadwell bonnell silvermont knl \
+skylake-avx512 x86-64 native"
 
 # Additional x86 processors supported by --with-cpu=.  Each processor
 # MUST be separated by exactly one space.
@@ -607,8 +611,11 @@ case ${target} in
   *-*-darwin9*)
     tm_file="${tm_file} darwin9.h"
     ;;
-  *-*-darwin[12][0-9]*)
+  *-*-darwin[1][01]*)
     tm_file="${tm_file} darwin9.h darwin10.h"
+    ;;
+  *-*-darwin[1][2-9]* | *-*-darwin[2][0-9]*)
+    tm_file="${tm_file} darwin9.h darwin10.h darwin12.h"
     ;;
   esac
   tm_file="${tm_file} ${cpu_type}/darwin.h"
@@ -666,6 +673,11 @@ case ${target} in
   gas=yes
   gnu_ld=yes
   fbsd_major=`echo ${target} | sed -e 's/.*freebsd//g' | sed -e 's/\..*//g'`
+  if test "$fbsd_major" = ""; then
+    echo "Specify the major version number of the targeted FreeBSD release"
+    echo "like this: --target=amd64-unknown-freebsd10.1"
+    exit 1
+  fi
   tm_defines="${tm_defines} FBSD_MAJOR=${fbsd_major}"
   tmake_file="t-slibgcc"
   case ${enable_threads} in
@@ -721,6 +733,9 @@ case ${target} in
       ;;
     *-*-*uclibc*)
       tm_defines="$tm_defines DEFAULT_LIBC=LIBC_UCLIBC"
+      ;;
+    *-*-*musl*)
+      tm_defines="$tm_defines DEFAULT_LIBC=LIBC_MUSL"
       ;;
     *)
       tm_defines="$tm_defines DEFAULT_LIBC=LIBC_GLIBC"
@@ -821,6 +836,12 @@ case ${target} in
   sol2_tm_file_head="dbxelf.h elfos.h ${cpu_type}/sysv4.h"
   sol2_tm_file_tail="${cpu_type}/sol2.h sol2.h"
   sol2_tm_file="${sol2_tm_file_head} ${sol2_tm_file_tail}"
+  case ${target} in
+    *-*-solaris2.1[2-9]*)
+      # __cxa_atexit was introduced in Solaris 12.
+      default_use_cxa_atexit=yes
+      ;;
+  esac
   use_gcc_stdint=wrap
   if test x$gnu_ld = xyes; then
     tm_file="usegld.h ${tm_file}"
@@ -1010,6 +1031,27 @@ arm-wrs-vxworks)
 	extra_options="${extra_options} arm/vxworks.opt"
 	tmake_file="${tmake_file} arm/t-arm arm/t-vxworks"
 	;;
+arm*-*-freebsd*)                # ARM FreeBSD EABI
+	tm_file="dbxelf.h elfos.h ${fbsd_tm_file} arm/elf.h"
+	case $target in
+	arm*b-*-freebsd*)
+	    tm_defines="${tm_defines} TARGET_BIG_ENDIAN_DEFAULT=1"
+	    ;;
+	esac
+	tmake_file="${tmake_file} arm/t-arm arm/t-bpabi"
+	tm_file="${tm_file} arm/bpabi.h arm/freebsd.h arm/aout.h arm/arm.h"
+	case $target in
+	armv6*-*-freebsd*)
+	    tm_defines="${tm_defines} TARGET_FREEBSD_ARMv6=1"
+	    ;;
+	esac
+	case $target in
+	arm*hf-*-freebsd*)
+	    tm_defines="${tm_defines} TARGET_FREEBSD_ARM_HARD_FLOAT=1"
+	    ;;
+	esac
+	with_tls=${with_tls:-gnu}
+	;;
 arm*-*-netbsdelf*)
 	tm_file="dbxelf.h elfos.h netbsd.h netbsd-elf.h arm/elf.h arm/aout.h ${tm_file} arm/netbsd-elf.h"
 	extra_options="${extra_options} netbsd.opt netbsd-elf.opt"
@@ -1057,8 +1099,8 @@ arm*-*-eabi* | arm*-*-symbianelf* | arm*-*-rtems*)
 	  use_gcc_stdint=wrap
 	  ;;
 	arm*-*-rtems*)
-	  tm_file="${tm_file} rtems.h arm/rtems-eabi.h newlib-stdint.h"
-	  tmake_file="${tmake_file} arm/t-bpabi arm/t-rtems-eabi"
+	  tm_file="${tm_file} rtems.h arm/rtems.h newlib-stdint.h"
+	  tmake_file="${tmake_file} arm/t-bpabi arm/t-rtems"
 	  ;;
 	arm*-*-symbianelf*)
 	  tm_file="${tm_file} arm/symbian.h"
@@ -1070,13 +1112,14 @@ arm*-*-eabi* | arm*-*-symbianelf* | arm*-*-rtems*)
 	tm_file="${tm_file} arm/aout.h vxworks-dummy.h arm/arm.h"
 	;;
 avr-*-rtems*)
-	tm_file="elfos.h avr/elf.h avr/avr-arch.h avr/avr.h dbxelf.h avr/rtems.h rtems.h newlib-stdint.h"
+	tm_file="elfos.h avr/elf.h avr/avr-arch.h avr/avr.h avr/specs.h dbxelf.h avr/rtems.h rtems.h newlib-stdint.h"
+	tm_defines="${tm_defines} WITH_RTEMS"
 	tmake_file="${tmake_file} avr/t-avr avr/t-multilib avr/t-rtems"
 	extra_gcc_objs="driver-avr.o avr-devices.o"
 	extra_objs="avr-devices.o avr-log.o"
 	;;
 avr-*-*)
-	tm_file="elfos.h avr/elf.h avr/avr-arch.h avr/avr.h dbxelf.h avr/avr-stdint.h"
+	tm_file="elfos.h avr/elf.h avr/avr-arch.h avr/avr.h avr/specs.h dbxelf.h avr/avr-stdint.h"
 	if test x${with_avrlibc} != xno; then
 	    tm_file="${tm_file} ${cpu_type}/avrlibc.h"
 	    tm_defines="${tm_defines} WITH_AVRLIBC"
@@ -1098,7 +1141,7 @@ bfin*-uclinux*)
 	;;
 bfin*-linux-uclibc*)
 	tm_file="${tm_file} dbxelf.h elfos.h bfin/elf.h gnu-user.h linux.h glibc-stdint.h bfin/linux.h ./linux-sysroot-suffix.h"
-	tmake_file="bfin/t-bfin-linux t-slibgcc t-linux"
+	tmake_file="${tmake_file} bfin/t-bfin-linux"
 	use_collect2=no
 	;;
 bfin*-rtems*)
@@ -1163,6 +1206,12 @@ frv-*-*linux*)
 	         gnu-user.h linux.h glibc-stdint.h frv/linux.h"
 	tmake_file="${tmake_file} frv/t-frv frv/t-linux"
 	;;
+ft32-*-elf)
+	gas=yes
+	gnu_ld=yes
+	tm_file="dbxelf.h elfos.h newlib-stdint.h ${tm_file}"
+	tmake_file="${tmake_file} ft32/t-ft32"
+	;;
 moxie-*-elf)
 	gas=yes
 	gnu_ld=yes
@@ -1192,6 +1241,10 @@ h8300-*-rtems*)
 h8300-*-elf*)
 	tmake_file="h8300/t-h8300"
 	tm_file="h8300/h8300.h dbxelf.h elfos.h newlib-stdint.h h8300/elf.h"
+	;;
+h8300-*-linux*)
+	tmake_file="${tmake_file} h8300/t-h8300 h8300/t-linux"
+	tm_file="h8300/h8300.h dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h h8300/linux.h"
 	;;
 hppa*64*-*-linux*)
 	target_cpu_default="MASK_PA_11|MASK_PA_20"
@@ -1345,6 +1398,9 @@ x86_64-*-darwin*)
 	tmake_file="${tmake_file} ${cpu_type}/t-darwin64 t-slibgcc"
 	tm_file="${tm_file} ${cpu_type}/darwin64.h"
 	;;
+i[34567]86-*-elfiamcu)
+	tm_file="${tm_file} i386/unix.h i386/att.h dbxelf.h elfos.h newlib-stdint.h i386/iamcu.h"
+	;;
 i[34567]86-*-elf*)
 	tm_file="${tm_file} i386/unix.h i386/att.h dbxelf.h elfos.h newlib-stdint.h i386/i386elf.h"
 	;;
@@ -1492,7 +1548,7 @@ x86_64-*-linux* | x86_64-*-kfreebsd*-gnu | x86_64-*-knetbsd*-gnu)
 		tm_file="${tm_file} kfreebsd-gnu.h i386/kfreebsd-gnu64.h"
 		;;
 	x86_64-*-knetbsd*-gnu)
-		tm_file="${tm_file} knetbsd-gnu.h"
+		tm_file="${tm_file} knetbsd-gnu.h i386/knetbsd-gnu64.h"
 		;;
 	esac
 	tmake_file="${tmake_file} i386/t-linux64"
@@ -1779,7 +1835,7 @@ iq2000*-*-elf*)
         md_file=iq2000/iq2000.md
         ;;
 lm32-*-elf*)
-        tm_file="dbxelf.h elfos.h ${tm_file}"
+        tm_file="dbxelf.h elfos.h ${tm_file} newlib-stdint.h"
 	tmake_file="${tmake_file} lm32/t-lm32"
         ;;
 lm32-*-rtems*)
@@ -1961,6 +2017,14 @@ mips*-*-netbsd*)			# NetBSD/mips, either endian.
 	tm_file="elfos.h ${tm_file} mips/elf.h netbsd.h netbsd-elf.h mips/netbsd.h"
 	extra_options="${extra_options} netbsd.opt netbsd-elf.opt"
 	;;
+mips*-img-linux*)
+	tm_file="dbxelf.h elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h mips/mti-linux.h"
+	extra_options="${extra_options} linux-android.opt"
+	tmake_file="${tmake_file} mips/t-img-linux"
+	tm_defines="${tm_defines} MIPS_ISA_DEFAULT=37 MIPS_ABI_DEFAULT=ABI_32"
+	gnu_ld=yes
+	gas=yes
+	;;
 mips*-mti-linux*)
 	tm_file="dbxelf.h elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h mips/mti-linux.h"
 	extra_options="${extra_options} linux-android.opt"
@@ -1973,6 +2037,9 @@ mips*-*-linux*)				# Linux MIPS, either endian.
 	tm_file="dbxelf.h elfos.h gnu-user.h linux.h linux-android.h glibc-stdint.h ${tm_file} mips/gnu-user.h mips/linux.h mips/linux-common.h"
 	extra_options="${extra_options} linux-android.opt"
 	case ${target} in
+		mipsisa32r6*)
+			default_mips_arch=mips32r6
+			;;
 		mipsisa32r2*)
 			default_mips_arch=mips32r2
 			;;
@@ -1989,6 +2056,11 @@ mips*-*-linux*)				# Linux MIPS, either endian.
 			default_mips_abi=n32
 			tm_defines="${tm_defines} MIPS_CPU_STRING_DEFAULT=\\\"octeon\\\""
 			target_cpu_default=MASK_SOFT_FLOAT_ABI
+			enable_mips_multilibs="yes"
+			;;
+		mipsisa64r6*-*-linux*)
+			default_mips_abi=n32
+			default_mips_arch=mips64r6
 			enable_mips_multilibs="yes"
 			;;
 		mipsisa64r2*-*-linux*)
@@ -2013,6 +2085,11 @@ mips*-mti-elf*)
 	tmake_file="mips/t-mti-elf"
 	tm_defines="${tm_defines} MIPS_ISA_DEFAULT=33 MIPS_ABI_DEFAULT=ABI_32"
 	;;
+mips*-img-elf*)
+	tm_file="elfos.h newlib-stdint.h ${tm_file} mips/elf.h mips/n32-elf.h mips/sde.h mips/mti-elf.h"
+	tmake_file="mips/t-img-elf"
+	tm_defines="${tm_defines} MIPS_ISA_DEFAULT=37 MIPS_ABI_DEFAULT=ABI_32"
+	;;
 mips*-sde-elf*)
 	tm_file="elfos.h newlib-stdint.h ${tm_file} mips/elf.h mips/n32-elf.h mips/sde.h"
 	tmake_file="mips/t-sde"
@@ -2033,11 +2110,17 @@ mips*-sde-elf*)
 	    ;;
 	esac
 	case ${target} in
+	  mipsisa32r6*)
+	    tm_defines="MIPS_ISA_DEFAULT=37 MIPS_ABI_DEFAULT=ABI_32"
+	    ;;
 	  mipsisa32r2*)
 	    tm_defines="MIPS_ISA_DEFAULT=33 MIPS_ABI_DEFAULT=ABI_32"
 	    ;;
 	  mipsisa32*)
 	    tm_defines="MIPS_ISA_DEFAULT=32 MIPS_ABI_DEFAULT=ABI_32"
+	    ;;
+	  mipsisa64r6*)
+	    tm_defines="MIPS_ISA_DEFAULT=69 MIPS_ABI_DEFAULT=ABI_N32"
 	    ;;
 	  mipsisa64r2*)
 	    tm_defines="MIPS_ISA_DEFAULT=65 MIPS_ABI_DEFAULT=ABI_N32"
@@ -2049,16 +2132,24 @@ mips*-sde-elf*)
 	;;
 mipsisa32-*-elf* | mipsisa32el-*-elf* | \
 mipsisa32r2-*-elf* | mipsisa32r2el-*-elf* | \
+mipsisa32r6-*-elf* | mipsisa32r6el-*-elf* | \
 mipsisa64-*-elf* | mipsisa64el-*-elf* | \
-mipsisa64r2-*-elf* | mipsisa64r2el-*-elf*)
+mipsisa64r2-*-elf* | mipsisa64r2el-*-elf* | \
+mipsisa64r6-*-elf* | mipsisa64r6el-*-elf*)
 	tm_file="elfos.h newlib-stdint.h ${tm_file} mips/elf.h"
 	tmake_file="mips/t-isa3264"
 	case ${target} in
+	  mipsisa32r6*)
+	    tm_defines="${tm_defines} MIPS_ISA_DEFAULT=37"
+	    ;;
 	  mipsisa32r2*)
 	    tm_defines="${tm_defines} MIPS_ISA_DEFAULT=33"
 	    ;;
 	  mipsisa32*)
 	    tm_defines="${tm_defines} MIPS_ISA_DEFAULT=32"
+	    ;;
+	  mipsisa64r6*)
+	    tm_defines="${tm_defines} MIPS_ISA_DEFAULT=69"
 	    ;;
 	  mipsisa64r2*)
 	    tm_defines="${tm_defines} MIPS_ISA_DEFAULT=65"
@@ -2178,6 +2269,10 @@ nios2-*-*)
 nvptx-*)
 	tm_file="${tm_file} newlib-stdint.h"
 	tmake_file="nvptx/t-nvptx"
+	if test x$enable_as_accelerator = xyes; then
+		extra_programs="${extra_programs} mkoffload\$(exeext)"
+		tm_file="${tm_file} nvptx/offload.h"
+	fi
 	;;
 pdp11-*-*)
 	tm_file="${tm_file} newlib-stdint.h"
@@ -2280,28 +2375,33 @@ powerpc-*-rtems*)
 powerpc*-*-linux*)
 	tm_file="${tm_file} dbxelf.h elfos.h gnu-user.h freebsd-spec.h rs6000/sysv4.h"
 	extra_options="${extra_options} rs6000/sysv4.opt"
-	tmake_file="rs6000/t-fprules rs6000/t-ppcos ${tmake_file} rs6000/t-ppccomm"
+	tmake_file="${tmake_file} rs6000/t-fprules rs6000/t-ppccomm"
 	extra_objs="$extra_objs rs6000-linux.o"
 	case ${target} in
 	    powerpc*le-*-*)
 		tm_file="${tm_file} rs6000/sysv4le.h" ;;
 	esac
-	maybe_biarch=yes
+	case ${target}:${with_cpu} in
+	    powerpc64*: | powerpc64*:native) cpu_is_64bit=yes ;;
+	esac
+	maybe_biarch=${cpu_is_64bit}
+	case ${enable_targets} in
+	    *powerpc64*) maybe_biarch=yes ;;
+	    all) maybe_biarch=yes ;;
+	esac
 	case ${target} in
 	    powerpc64*-*-linux*spe* | powerpc64*-*-linux*paired*)
-	    	echo "*** Configuration ${target} not supported" 1>&2
+		echo "*** Configuration ${target} not supported" 1>&2
 		exit 1
 		;;
 	    powerpc*-*-linux*spe* | powerpc*-*-linux*paired*)
 		maybe_biarch=
 		;;
-	    powerpc64*-*-linux*)
-	    	test x$with_cpu != x || cpu_is_64bit=yes
-		maybe_biarch=always
-		;;
 	esac
-	case ${maybe_biarch}:${enable_targets}:${cpu_is_64bit} in
-	    always:* | yes:*powerpc64* | yes:all:* | yes:*:yes)
+	case ${target}:${enable_targets}:${maybe_biarch} in
+	    powerpc64-* | powerpc-*:*:yes | *:*powerpc64-*:yes | *:all:yes \
+	    | powerpc64le*:*powerpcle* | powerpc64le*:*powerpc-* \
+	    | powerpcle-*:*powerpc64le*:yes)
 		if test x$cpu_is_64bit = xyes; then
 		    tm_file="${tm_file} rs6000/default64.h"
 		fi
@@ -2322,9 +2422,14 @@ powerpc*-*-linux*)
 		esac
 		extra_options="${extra_options} rs6000/linux64.opt"
 		;;
+	    powerpc64*)
+		tm_file="${tm_file} rs6000/default64.h rs6000/linux64.h glibc-stdint.h"
+		extra_options="${extra_options} rs6000/linux64.opt"
+		tmake_file="${tmake_file} rs6000/t-linux"
+		;;
 	    *)
 		tm_file="${tm_file} rs6000/linux.h glibc-stdint.h"
-		tmake_file="$tmake_file rs6000/t-linux"
+		tmake_file="${tmake_file} rs6000/t-ppcos rs6000/t-linux"
 		;;
 	esac
 	case ${target} in
@@ -2337,6 +2442,10 @@ powerpc*-*-linux*)
 		tm_file="${tm_file} rs6000/linuxspe.h rs6000/e500.h" ;;
 	    powerpc*-*-linux*paired*)
 		tm_file="${tm_file} rs6000/750cl.h" ;;
+	esac
+	case ${target} in
+	    *-linux*-musl*)
+		enable_secureplt=yes ;;
 	esac
 	if test x${enable_secureplt} = xyes; then
 		tm_file="rs6000/secureplt.h ${tm_file}"
@@ -2423,7 +2532,7 @@ rs6000-ibm-aix5.3.* | powerpc-ibm-aix5.3.*)
 	use_gcc_stdint=wrap
 	extra_headers=altivec.h
 	;;
-rs6000-ibm-aix[6789].* | powerpc-ibm-aix[6789].*)
+rs6000-ibm-aix6.* | powerpc-ibm-aix6.*)
 	tm_file="${tm_file} rs6000/aix.h rs6000/aix61.h rs6000/xcoff.h rs6000/aix-stdint.h"
 	tmake_file="rs6000/t-aix52 t-slibgcc"
 	extra_options="${extra_options} rs6000/aix64.opt"
@@ -2431,6 +2540,17 @@ rs6000-ibm-aix[6789].* | powerpc-ibm-aix[6789].*)
 	thread_file='aix'
 	use_gcc_stdint=wrap
 	extra_headers=altivec.h
+	default_use_cxa_atexit=yes
+	;;
+rs6000-ibm-aix[789].* | powerpc-ibm-aix[789].*)
+	tm_file="${tm_file} rs6000/aix.h rs6000/aix71.h rs6000/xcoff.h rs6000/aix-stdint.h"
+	tmake_file="rs6000/t-aix52 t-slibgcc"
+	extra_options="${extra_options} rs6000/aix64.opt"
+	use_collect2=yes
+	thread_file='aix'
+	use_gcc_stdint=wrap
+	extra_headers=altivec.h
+	default_use_cxa_atexit=yes
 	;;
 rl78-*-elf*)
 	tm_file="dbxelf.h elfos.h newlib-stdint.h ${tm_file}"
@@ -2446,27 +2566,35 @@ rx-*-elf*)
 s390-*-linux*)
 	default_gnu_indirect_function=yes
 	tm_file="s390/s390.h dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h s390/linux.h"
+	c_target_objs="${c_target_objs} s390-c.o"
+	cxx_target_objs="${cxx_target_objs} s390-c.o"
 	if test x$enable_targets = xall; then
 		tmake_file="${tmake_file} s390/t-linux64"
 	fi
+	tmake_file="${tmake_file} s390/t-s390"
 	;;
 s390x-*-linux*)
 	default_gnu_indirect_function=yes
 	tm_file="s390/s390x.h s390/s390.h dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h s390/linux.h"
 	tm_p_file="linux-protos.h s390/s390-protos.h"
+	c_target_objs="${c_target_objs} s390-c.o"
+	cxx_target_objs="${cxx_target_objs} s390-c.o"
 	md_file=s390/s390.md
 	extra_modes=s390/s390-modes.def
 	out_file=s390/s390.c
-	tmake_file="${tmake_file} s390/t-linux64"
+	tmake_file="${tmake_file} s390/t-linux64 s390/t-s390"
 	;;
 s390x-ibm-tpf*)
-        tm_file="s390/s390x.h s390/s390.h dbxelf.h elfos.h s390/tpf.h"
-        tm_p_file=s390/s390-protos.h
-        md_file=s390/s390.md
-        extra_modes=s390/s390-modes.def
-        out_file=s390/s390.c
-        thread_file='tpf'
+	tm_file="s390/s390x.h s390/s390.h dbxelf.h elfos.h s390/tpf.h"
+	tm_p_file=s390/s390-protos.h
+	c_target_objs="${c_target_objs} s390-c.o"
+	cxx_target_objs="${cxx_target_objs} s390-c.o"
+	md_file=s390/s390.md
+	extra_modes=s390/s390-modes.def
+	out_file=s390/s390.c
+	thread_file='tpf'
 	extra_options="${extra_options} s390/tpf.opt"
+	tmake_file="${tmake_file} s390/t-s390"
 	;;
 sh-*-elf* | sh[12346l]*-*-elf* | \
   sh-*-linux* | sh[2346lbe]*-*-linux* | \
@@ -2500,6 +2628,9 @@ sh-*-elf* | sh[12346l]*-*-elf* | \
 	tm_file="${tm_file} dbxelf.h elfos.h sh/elf.h"
 	case ${target} in
 	sh*-*-linux*)	tmake_file="${tmake_file} sh/t-linux"
+			if test x$enable_fdpic = xyes; then
+				tm_defines="$tm_defines FDPIC_DEFAULT=1"
+			fi
 			tm_file="${tm_file} gnu-user.h linux.h glibc-stdint.h sh/linux.h" ;;
 	sh*-*-netbsd*)
 			tm_file="${tm_file} netbsd.h netbsd-elf.h sh/netbsd-elf.h"
@@ -2849,9 +2980,13 @@ vax-*-netbsdelf*)
 	extra_options="${extra_options} netbsd.opt netbsd-elf.opt vax/elf.opt"
 	;;
 vax-*-openbsd*)
-	tm_file="vax/vax.h vax/openbsd1.h openbsd.h openbsd-stdint.h openbsd-pthread.h vax/openbsd.h"
+	tm_file="vax/vax.h vax/openbsd1.h openbsd.h openbsd-stdint.h openbsd-libpthread.h vax/openbsd.h"
 	extra_options="${extra_options} openbsd.opt"
 	use_collect2=yes
+	;;
+visium-*-elf*)
+	tm_file="dbxelf.h elfos.h ${tm_file} visium/elf.h newlib-stdint.h"
+	tmake_file="visium/t-visium visium/t-crtstuff"
 	;;
 xstormy16-*-elf)
 	# For historical reasons, the target files omit the 'x'.
@@ -2869,6 +3004,11 @@ xtensa*-*-elf*)
 xtensa*-*-linux*)
 	tm_file="${tm_file} dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h xtensa/linux.h"
 	tmake_file="${tmake_file} xtensa/t-xtensa"
+	;;
+xtensa*-*-uclinux*)
+	tm_file="${tm_file} dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h xtensa/uclinux.h"
+	tmake_file="${tmake_file} xtensa/t-xtensa"
+	extra_options="${extra_options} xtensa/uclinux.opt"
 	;;
 am33_2.0-*-linux*)
 	tm_file="mn10300/mn10300.h dbxelf.h elfos.h gnu-user.h linux.h glibc-stdint.h mn10300/linux.h"
@@ -2906,6 +3046,7 @@ esac
 case ${target} in
 *-intelmic-* | *-intelmicemul-*)
 	tmake_file="${tmake_file} i386/t-intelmic"
+	tm_file="${tm_file} i386/intelmic-offload.h"
 	;;
 esac
 
@@ -2988,6 +3129,10 @@ case ${target} in
     ;;
   i686-*-* | i786-*-*)
     case ${target_noncanonical} in
+      znver1-*)
+	arch=znver1
+	cpu=znver1
+	;;
       bdver4-*)
         arch=bdver4
         cpu=bdver4
@@ -3101,6 +3246,10 @@ case ${target} in
     ;;
   x86_64-*-*)
     case ${target_noncanonical} in
+      znver1-*)
+	arch=znver1
+	cpu=znver1
+	;;
       bdver4-*)
         arch=bdver4
         cpu=bdver4
@@ -3169,6 +3318,9 @@ esac
 # This block sets nothing except for with_cpu.
 if test x$with_cpu = x ; then
   case ${target} in
+    i[34567]86-*-elfiamcu)
+      with_cpu=lakemont
+      ;;
     i[34567]86-*-*|x86_64-*-*)
       with_cpu=$cpu
       ;;
@@ -3226,6 +3378,9 @@ if test x$with_cpu = x ; then
 	  ;;
       esac
       ;;
+    visium-*-*)
+      with_cpu=gr5
+      ;;
   esac
 
   # Avoid overriding --with-cpu-32 and --with-cpu-64 values.
@@ -3260,6 +3415,9 @@ if test x$with_arch = x ; then
     i[34567]86-*-darwin*|x86_64-*-darwin*)
       # Default arch is set via TARGET_SUBTARGET32_ISA_DEFAULT
       # and TARGET_SUBTARGET64_ISA_DEFAULT in config/i386/darwin.h.
+      ;;
+    i[34567]86-*-elfiamcu)
+      with_arch=lakemont
       ;;
     i[34567]86-*-*)
       # --with-fpmath sets the default ISA to SSE2, which is the same
@@ -3396,7 +3554,7 @@ case "${target}" in
 
 			eval "val=\$with_$which"
 			base_val=`echo $val | sed -e 's/\+.*//'`
-			ext_val=`echo $val | sed -e 's/[a-z0-9\-]\+//'`
+			ext_val=`echo $val | sed -e 's/[a-z0-9.-]\+//'`
 
 			if [ $which = arch ]; then
 			  def=aarch64-arches.def
@@ -3937,8 +4095,21 @@ case "${target}" in
 		esac
 		;;
 
+	nios2*-*-*)
+		supported_defaults="arch"
+			case "$with_arch" in
+			"" | r1 | r2)
+				# OK
+				;;
+			*)
+				echo "Unknown arch used in --with-arch=$with_arch" 1>&2
+				exit 1
+				;;
+			esac
+		;;
+
 	powerpc*-*-* | rs6000-*-*)
-		supported_defaults="abi cpu cpu_32 cpu_64 float tune tune_32 tune_64"
+		supported_defaults="abi cpu cpu_32 cpu_64 float tune tune_32 tune_64 advance_toolchain"
 
 		for which in cpu cpu_32 cpu_64 tune tune_32 tune_64; do
 			eval "val=\$with_$which"
@@ -3960,7 +4131,7 @@ case "${target}" in
 				eval "with_$which=405"
 				;;
 			"" | common | native \
-			| power | power[2345678] | power6x | powerpc | powerpc64 \
+			| power | power[23456789] | power6x | powerpc | powerpc64 \
 			| rios | rios1 | rios2 | rsc | rsc1 | rs64a \
 			| 401 | 403 | 405 | 405fp | 440 | 440fp | 464 | 464fp \
 			| 476 | 476fp | 505 | 601 | 602 | 603 | 603e | ec603e \
@@ -3985,6 +4156,56 @@ case "${target}" in
 			exit 1
 			;;
 		esac
+
+		if test "x$with_advance_toolchain" != x; then
+		    if test -d "/opt/$with_advance_toolchain/." -a \
+			-d "/opt/$with_advance_toolchain/bin/." -a \
+			-d "/opt/$with_advance_toolchain/include/."; then
+
+			tm_file="$tm_file ./advance-toolchain.h"
+			(at="/opt/$with_advance_toolchain"
+			 echo "/* Use Advance Toolchain $at */"
+			 echo
+			 echo "#ifndef USE_AT_INCLUDE_FILES"
+			 echo "#define USE_AT_INCLUDE_FILES 1"
+			 echo "#endif"
+			 echo
+			 echo "#if USE_AT_INCLUDE_FILES"
+			 echo "#undef  INCLUDE_EXTRA_SPEC"
+			 echo "#define INCLUDE_EXTRA_SPEC" \
+			      "\"-isystem $at/include\""
+			 echo "#endif"
+			 echo
+			 echo "#undef  LINK_OS_EXTRA_SPEC32"
+			 echo "#define LINK_OS_EXTRA_SPEC32" \
+			      "\"%(link_os_new_dtags)" \
+			      "-rpath $prefix/lib -rpath $at/lib" \
+			      "-L $prefix/lib -L $at/lib\""
+			 echo
+			 echo "#undef  LINK_OS_EXTRA_SPEC64"
+			 echo "#define LINK_OS_EXTRA_SPEC64" \
+			      "\"%(link_os_new_dtags)" \
+			      "-rpath $prefix/lib64 -rpath $at/lib64" \
+			      "-L $prefix/lib64 -L $at/lib64\""
+			 echo
+			 echo "#undef  LINK_OS_NEW_DTAGS_SPEC"
+			 echo "#define LINK_OS_NEW_DTAGS_SPEC" \
+			      "\"--enable-new-dtags\""
+			 echo
+			 echo "#undef  DYNAMIC_LINKER_PREFIX"
+			 echo "#define DYNAMIC_LINKER_PREFIX \"$at\""
+			 echo
+			 echo "#undef  MD_EXEC_PREFIX"
+			 echo "#define MD_EXEC_PREFIX \"$at/bin/\""
+			 echo
+			 echo "#undef  MD_STARTFILE_PREFIX"
+			 echo "#define MD_STARTFILE_PREFIX \"$at/lib/\"") \
+			    > advance-toolchain.h
+		    else
+			echo "Unknown advance-toolchain $with_advance_toolchain"
+			exit 1
+		    fi
+		fi
 		;;
 
 	s390*-*-*)
@@ -3993,7 +4214,7 @@ case "${target}" in
 		for which in arch tune; do
 			eval "val=\$with_$which"
 			case ${val} in
-			"" | g5 | g6 | z900 | z990 | z9-109 | z9-ec | z10 | z196 | zEC12)
+			"" | native | g5 | g6 | z900 | z990 | z9-109 | z9-ec | z10 | z196 | zEC12 | z13)
 				# OK
 				;;
 			*)
@@ -4014,7 +4235,7 @@ case "${target}" in
 		esac
 		;;
 
-	sh[123456ble]-*-* | sh-*-*)
+	sh[123456ble]*-*-* | sh-*-*)
 		supported_defaults="cpu"
 		case "`echo $with_cpu | tr ABCDEFGHIJKLMNOPQRSTUVWXYZ_ abcdefghijklmnopqrstuvwxyz- | sed s/sh/m/`" in
 		"" | m1 | m2 | m2e | m3 | m3e | m4 | m4-single | m4-single-only | m4-nofpu )
@@ -4109,6 +4330,16 @@ case "${target}" in
 			;;
 		esac
 		;;
+	visium-*-*)
+		supported_defaults="cpu"
+		case $with_cpu in
+		  "" | gr5 | gr6)
+			;;
+		  *)    echo "Unknown cpu used in --with-cpu=$with_cpu" 1>&2
+			exit 1
+			;;
+		esac
+		;;
 esac
 
 # Set some miscellaneous flags for particular targets.
@@ -4192,8 +4423,10 @@ case ${target} in
 		    mips4)    tm_defines="$tm_defines MIPS_ISA_DEFAULT=4" ;;
 		    mips32)   tm_defines="$tm_defines MIPS_ISA_DEFAULT=32" ;;
 		    mips32r2) tm_defines="$tm_defines MIPS_ISA_DEFAULT=33" ;;
+		    mips32r6) tm_defines="$tm_defines MIPS_ISA_DEFAULT=37" ;;
 		    mips64)   tm_defines="$tm_defines MIPS_ISA_DEFAULT=64" ;;
 		    mips64r2) tm_defines="$tm_defines MIPS_ISA_DEFAULT=65" ;;
+		    mips64r6) tm_defines="$tm_defines MIPS_ISA_DEFAULT=69" ;;
 		esac
 		case ${default_mips_abi} in
 		    32)   tm_defines="$tm_defines MIPS_ABI_DEFAULT=ABI_32" ;;
@@ -4260,6 +4493,9 @@ case ${target} in
 			target_cpu_default2="TARGET_CPU_v850e1"
 			;;
 		esac
+		;;
+	visium-*-*)
+		target_cpu_default2="TARGET_CPU_$with_cpu"
 		;;
 esac
 

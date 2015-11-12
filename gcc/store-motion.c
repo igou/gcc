@@ -1,5 +1,5 @@
 /* Store motion via Lazy Code Motion on the reverse CFG.
-   Copyright (C) 1997-2014 Free Software Foundation, Inc.
+   Copyright (C) 1997-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,39 +20,19 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "diagnostic-core.h"
-#include "toplev.h"
-
+#include "backend.h"
 #include "rtl.h"
 #include "tree.h"
-#include "tm_p.h"
-#include "regs.h"
-#include "hard-reg-set.h"
-#include "flags.h"
-#include "insn-config.h"
-#include "recog.h"
 #include "predict.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "dominance.h"
-#include "cfg.h"
+#include "df.h"
+#include "toplev.h"
+
 #include "cfgrtl.h"
 #include "cfganal.h"
 #include "lcm.h"
 #include "cfgcleanup.h"
-#include "basic-block.h"
 #include "expr.h"
-#include "except.h"
-#include "ggc.h"
-#include "intl.h"
 #include "tree-pass.h"
-#include "hash-table.h"
-#include "df.h"
 #include "dbgcnt.h"
 #include "rtl-iter.h"
 
@@ -120,23 +100,21 @@ static struct edge_list *edge_list;
 
 /* Hashtable helpers.  */
 
-struct st_expr_hasher : typed_noop_remove <st_expr>
+struct st_expr_hasher : nofree_ptr_hash <st_expr>
 {
-  typedef st_expr value_type;
-  typedef st_expr compare_type;
-  static inline hashval_t hash (const value_type *);
-  static inline bool equal (const value_type *, const compare_type *);
+  static inline hashval_t hash (const st_expr *);
+  static inline bool equal (const st_expr *, const st_expr *);
 };
 
 inline hashval_t
-st_expr_hasher::hash (const value_type *x)
+st_expr_hasher::hash (const st_expr *x)
 {
   int do_not_record_p = 0;
   return hash_rtx (x->pattern, GET_MODE (x->pattern), &do_not_record_p, NULL, false);
 }
 
 inline bool
-st_expr_hasher::equal (const value_type *ptr1, const compare_type *ptr2)
+st_expr_hasher::equal (const st_expr *ptr1, const st_expr *ptr2)
 {
   return exp_equiv_p (ptr1->pattern, ptr2->pattern, 0, true);
 }
@@ -294,10 +272,10 @@ store_ops_ok (const_rtx x, int *regs_set)
 /* Returns a list of registers mentioned in X.
    FIXME: A regset would be prettier and less expensive.  */
 
-static rtx
+static rtx_expr_list *
 extract_mentioned_regs (rtx x)
 {
-  rtx mentioned_regs = NULL;
+  rtx_expr_list *mentioned_regs = NULL;
   subrtx_var_iterator::array_type array;
   FOR_EACH_SUBRTX_VAR (iter, array, x, NONCONST)
     {
@@ -650,9 +628,6 @@ compute_store_table (void)
 {
   int ret;
   basic_block bb;
-#ifdef ENABLE_CHECKING
-  unsigned regno;
-#endif
   rtx_insn *insn;
   rtx_insn *tmp;
   df_ref def;
@@ -698,11 +673,12 @@ compute_store_table (void)
 	      last_set_in[DF_REF_REGNO (def)] = 0;
 	}
 
-#ifdef ENABLE_CHECKING
-      /* last_set_in should now be all-zero.  */
-      for (regno = 0; regno < max_gcse_regno; regno++)
-	gcc_assert (!last_set_in[regno]);
-#endif
+      if (flag_checking)
+	{
+	  /* last_set_in should now be all-zero.  */
+	  for (unsigned regno = 0; regno < max_gcse_regno; regno++)
+	    gcc_assert (!last_set_in[regno]);
+	}
 
       /* Clear temporary marks.  */
       for (ptr = first_st_expr (); ptr != NULL; ptr = next_st_expr (ptr))
@@ -798,7 +774,7 @@ insert_store (struct st_expr * expr, edge e)
     return 0;
 
   reg = expr->reaching_reg;
-  insn = as_a <rtx_insn *> (gen_move_insn (copy_rtx (expr->pattern), reg));
+  insn = gen_move_insn (copy_rtx (expr->pattern), reg);
 
   /* If we are inserting this expression on ALL predecessor edges of a BB,
      insert it at the start of the BB, and reset the insert bits on the other
@@ -939,7 +915,7 @@ replace_store_insn (rtx reg, rtx_insn *del, basic_block bb,
   rtx mem, note, set, ptr;
 
   mem = smexpr->pattern;
-  insn = as_a <rtx_insn *> (gen_move_insn (reg, SET_SRC (single_set (del))));
+  insn = gen_move_insn (reg, SET_SRC (single_set (del)));
 
   for (ptr = smexpr->antic_stores; ptr; ptr = XEXP (ptr, 1))
     if (XEXP (ptr, 0) == del)

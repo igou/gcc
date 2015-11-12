@@ -1,5 +1,5 @@
 /* Routines for manipulation of expression nodes.
-   Copyright (C) 2000-2014 Free Software Foundation, Inc.
+   Copyright (C) 2000-2015 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -21,7 +21,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "flags.h"
+#include "options.h"
 #include "gfortran.h"
 #include "arith.h"
 #include "match.h"
@@ -1270,12 +1270,23 @@ depart:
 static gfc_constructor *
 find_component_ref (gfc_constructor_base base, gfc_ref *ref)
 {
-  gfc_component *comp;
-  gfc_component *pick;
+  gfc_component *pick = ref->u.c.component;
   gfc_constructor *c = gfc_constructor_first (base);
 
-  comp = ref->u.c.sym->components;
-  pick = ref->u.c.component;
+  gfc_symbol *dt = ref->u.c.sym;
+  int ext = dt->attr.extension;
+
+  /* For extended types, check if the desired component is in one of the
+   * parent types.  */
+  while (ext > 0 && gfc_find_component (dt->components->ts.u.derived,
+					pick->name, true, true))
+    {
+      dt = dt->components->ts.u.derived;
+      c = gfc_constructor_first (c->expr->value.constructor);
+      ext--;
+    }
+
+  gfc_component *comp = dt->components;
   while (comp != pick)
     {
       comp = comp->next;
@@ -1530,13 +1541,12 @@ find_array_section (gfc_expr *expr, gfc_ref *ref)
 	}
 
       limit = mpz_get_ui (ptr);
-      if (limit >= gfc_option.flag_max_array_constructor)
+      if (limit >= flag_max_array_constructor)
         {
 	  gfc_error ("The number of elements in the array constructor "
 		     "at %L requires an increase of the allowed %d "
 		     "upper limit.   See -fmax-array-constructor "
-		     "option", &expr->where,
-		     gfc_option.flag_max_array_constructor);
+		     "option", &expr->where, flag_max_array_constructor);
 	  return false;
 	}
 
@@ -2202,7 +2212,7 @@ check_alloc_comp_init (gfc_expr *e)
        ctor = gfc_constructor_first (e->value.constructor);
        comp; comp = comp->next, ctor = gfc_constructor_next (ctor))
     {
-      if (comp->attr.allocatable
+      if (comp->attr.allocatable && ctor->expr
           && ctor->expr->expr_type != EXPR_NULL)
         {
 	  gfc_error ("Invalid initialization expression for ALLOCATABLE "
@@ -2287,8 +2297,8 @@ check_inquiry (gfc_expr *e, int not_restricted)
 	if (strcmp (functions[i], name) == 0)
 	  break;
 
-	if (functions[i] == NULL)
-	  return MATCH_ERROR;
+      if (functions[i] == NULL)
+	return MATCH_ERROR;
     }
 
   /* At this point we have an inquiry function with a variable argument.  The
@@ -2464,13 +2474,14 @@ gfc_check_init_expr (gfc_expr *e)
 	gfc_intrinsic_sym* isym;
 	gfc_symbol* sym = e->symtree->n.sym;
 
-	/* Special case for IEEE_SELECTED_REAL_KIND from the intrinsic
-	   module IEEE_ARITHMETIC, which is allowed in initialization
-	   expressions.  */
-	if (!strcmp(sym->name, "ieee_selected_real_kind")
-	    && sym->from_intmod == INTMOD_IEEE_ARITHMETIC)
+	/* Simplify here the intrinsics from the IEEE_ARITHMETIC and
+	   IEEE_EXCEPTIONS modules.  */
+	int mod = sym->from_intmod;
+	if (mod == INTMOD_NONE && sym->generic)
+	  mod = sym->generic->sym->from_intmod;
+	if (mod == INTMOD_IEEE_ARITHMETIC || mod == INTMOD_IEEE_EXCEPTIONS)
 	  {
-	    gfc_expr *new_expr = gfc_simplify_ieee_selected_real_kind (e);
+	    gfc_expr *new_expr = gfc_simplify_ieee_functions (e);
 	    if (new_expr)
 	      {
 		gfc_replace_expr (e, new_expr);
@@ -2589,14 +2600,18 @@ gfc_check_init_expr (gfc_expr *e)
       break;
 
     case EXPR_SUBSTRING:
-      t = gfc_check_init_expr (e->ref->u.ss.start);
-      if (!t)
-	break;
+      if (e->ref)
+	{
+	  t = gfc_check_init_expr (e->ref->u.ss.start);
+	  if (!t)
+	    break;
 
-      t = gfc_check_init_expr (e->ref->u.ss.end);
-      if (t)
-	t = gfc_simplify_expr (e, 0);
-
+	  t = gfc_check_init_expr (e->ref->u.ss.end);
+	  if (t)
+	    t = gfc_simplify_expr (e, 0);
+	}
+      else
+	t = false;
       break;
 
     case EXPR_STRUCTURE:
@@ -2728,6 +2743,29 @@ external_spec_function (gfc_expr *e)
 
   f = e->value.function.esym;
 
+  /* IEEE functions allowed are "a reference to a transformational function
+     from the intrinsic module IEEE_ARITHMETIC or IEEE_EXCEPTIONS", and
+     "inquiry function from the intrinsic modules IEEE_ARITHMETIC and
+     IEEE_EXCEPTIONS".  */
+  if (f->from_intmod == INTMOD_IEEE_ARITHMETIC
+      || f->from_intmod == INTMOD_IEEE_EXCEPTIONS)
+    {
+      if (!strcmp (f->name, "ieee_selected_real_kind")
+	  || !strcmp (f->name, "ieee_support_rounding")
+	  || !strcmp (f->name, "ieee_support_flag")
+	  || !strcmp (f->name, "ieee_support_halting")
+	  || !strcmp (f->name, "ieee_support_datatype")
+	  || !strcmp (f->name, "ieee_support_denormal")
+	  || !strcmp (f->name, "ieee_support_divide")
+	  || !strcmp (f->name, "ieee_support_inf")
+	  || !strcmp (f->name, "ieee_support_io")
+	  || !strcmp (f->name, "ieee_support_nan")
+	  || !strcmp (f->name, "ieee_support_sqrt")
+	  || !strcmp (f->name, "ieee_support_standard")
+	  || !strcmp (f->name, "ieee_support_underflow_control"))
+	goto function_allowed;
+    }
+
   if (f->attr.proc == PROC_ST_FUNCTION)
     {
       gfc_error ("Specification function %qs at %L cannot be a statement "
@@ -2756,6 +2794,7 @@ external_spec_function (gfc_expr *e)
       return false;
     }
 
+function_allowed:
   return restricted_args (e->value.function.actual);
 }
 
@@ -2831,6 +2870,18 @@ check_references (gfc_ref* ref, bool (*checker) (gfc_expr*))
   return check_references (ref->next, checker);
 }
 
+/*  Return true if ns is a parent of the current ns.  */
+
+static bool
+is_parent_of_current_ns (gfc_namespace *ns)
+{
+  gfc_namespace *p;
+  for (p = gfc_current_ns->parent; p; p = p->parent)
+    if (ns == p)
+      return true;
+
+  return false;
+}
 
 /* Verify that an expression is a restricted expression.  Like its
    cousin check_init_expr(), an error message is generated if we
@@ -2919,9 +2970,7 @@ check_restricted (gfc_expr *e)
 	    || sym->attr.dummy
 	    || sym->attr.implied_index
 	    || sym->attr.flavor == FL_PARAMETER
-	    || (sym->ns && sym->ns == gfc_current_ns->parent)
-	    || (sym->ns && gfc_current_ns->parent
-		  && sym->ns == gfc_current_ns->parent->parent)
+	    || is_parent_of_current_ns (sym->ns)
 	    || (sym->ns->proc_name != NULL
 		  && sym->ns->proc_name->attr.flavor == FL_MODULE)
 	    || (gfc_is_formal_arg () && (sym->ns == gfc_current_ns)))
@@ -3108,19 +3157,22 @@ gfc_check_assign (gfc_expr *lvalue, gfc_expr *rvalue, int conform)
 	bad_proc = true;
 
       /* (ii) The assignment is in the main program; or  */
-      if (gfc_current_ns->proc_name->attr.is_main_program)
+      if (gfc_current_ns->proc_name
+	  && gfc_current_ns->proc_name->attr.is_main_program)
 	bad_proc = true;
 
       /* (iii) A module or internal procedure...  */
-      if ((gfc_current_ns->proc_name->attr.proc == PROC_INTERNAL
-	   || gfc_current_ns->proc_name->attr.proc == PROC_MODULE)
+      if (gfc_current_ns->proc_name
+	  && (gfc_current_ns->proc_name->attr.proc == PROC_INTERNAL
+	      || gfc_current_ns->proc_name->attr.proc == PROC_MODULE)
 	  && gfc_current_ns->parent
 	  && (!(gfc_current_ns->parent->proc_name->attr.function
 		|| gfc_current_ns->parent->proc_name->attr.subroutine)
 	      || gfc_current_ns->parent->proc_name->attr.is_main_program))
 	{
 	  /* ... that is not a function...  */
-	  if (!gfc_current_ns->proc_name->attr.function)
+	  if (gfc_current_ns->proc_name
+	      && !gfc_current_ns->proc_name->attr.function)
 	    bad_proc = true;
 
 	  /* ... or is not an entry and has a different name.  */
@@ -3221,55 +3273,6 @@ gfc_check_assign (gfc_expr *lvalue, gfc_expr *rvalue, int conform)
 		       ". This check can be disabled with the option "
 		       "%<-fno-range-check%>", &rvalue->where);
 	  return false;
-	}
-    }
-
-  /*  Warn about type-changing conversions for REAL or COMPLEX constants.
-      If lvalue and rvalue are mixed REAL and complex, gfc_compare_types
-      will warn anyway, so there is no need to to so here.  */
-
-  if (rvalue->expr_type == EXPR_CONSTANT && lvalue->ts.type == rvalue->ts.type
-      && (lvalue->ts.type == BT_REAL || lvalue->ts.type == BT_COMPLEX))
-    {
-      if (lvalue->ts.kind < rvalue->ts.kind && warn_conversion)
-	{
-	  /* As a special bonus, don't warn about REAL rvalues which are not
-	     changed by the conversion if -Wconversion is specified.  */
-	  if (rvalue->ts.type == BT_REAL && mpfr_number_p (rvalue->value.real))
-	    {
-	      /* Calculate the difference between the constant and the rounded
-		 value and check it against zero.  */
-	      mpfr_t rv, diff;
-	      gfc_set_model_kind (lvalue->ts.kind);
-	      mpfr_init (rv);
-	      gfc_set_model_kind (rvalue->ts.kind);
-	      mpfr_init (diff);
-
-	      mpfr_set (rv, rvalue->value.real, GFC_RND_MODE);
-	      mpfr_sub (diff, rv, rvalue->value.real, GFC_RND_MODE);
-
-	      if (!mpfr_zero_p (diff))
-		gfc_warning (OPT_Wconversion, 
-			     "Change of value in conversion from "
-			     " %qs to %qs at %L", gfc_typename (&rvalue->ts),
-			     gfc_typename (&lvalue->ts), &rvalue->where);
-
-	      mpfr_clear (rv);
-	      mpfr_clear (diff);
-	    }
-	  else
-	    gfc_warning (OPT_Wconversion,
-			 "Possible change of value in conversion from %qs "
-			 "to %qs at %L", gfc_typename (&rvalue->ts),
-			 gfc_typename (&lvalue->ts), &rvalue->where);
-
-	}
-      else if (warn_conversion_extra && lvalue->ts.kind > rvalue->ts.kind)
-	{
-	  gfc_warning (OPT_Wconversion_extra,
-		       "Conversion from %qs to %qs at %L",
-		       gfc_typename (&rvalue->ts),
-		       gfc_typename (&lvalue->ts), &rvalue->where);
 	}
     }
 
@@ -4042,6 +4045,7 @@ gfc_expr *
 gfc_lval_expr_from_sym (gfc_symbol *sym)
 {
   gfc_expr *lval;
+  gfc_array_spec *as;
   lval = gfc_get_expr ();
   lval->expr_type = EXPR_VARIABLE;
   lval->where = sym->declared_at;
@@ -4049,10 +4053,10 @@ gfc_lval_expr_from_sym (gfc_symbol *sym)
   lval->symtree = gfc_find_symtree (sym->ns->sym_root, sym->name);
 
   /* It will always be a full array.  */
-  lval->rank = sym->as ? sym->as->rank : 0;
+  as = IS_CLASS_ARRAY (sym) ? CLASS_DATA (sym)->as : sym->as;
+  lval->rank = as ? as->rank : 0;
   if (lval->rank)
-    gfc_add_full_array_ref (lval, sym->ts.type == BT_CLASS ?
-			    CLASS_DATA (sym)->as : sym->as);
+    gfc_add_full_array_ref (lval, as);
   return lval;
 }
 
@@ -4291,6 +4295,40 @@ bool
 gfc_is_proc_ptr_comp (gfc_expr *expr)
 {
   return (gfc_get_proc_ptr_comp (expr) != NULL);
+}
+
+
+/* Determine if an expression is a function with an allocatable class scalar
+   result.  */
+bool
+gfc_is_alloc_class_scalar_function (gfc_expr *expr)
+{
+  if (expr->expr_type == EXPR_FUNCTION
+      && expr->value.function.esym
+      && expr->value.function.esym->result
+      && expr->value.function.esym->result->ts.type == BT_CLASS
+      && !CLASS_DATA (expr->value.function.esym->result)->attr.dimension
+      && CLASS_DATA (expr->value.function.esym->result)->attr.allocatable)
+    return true;
+
+  return false;
+}
+
+
+/* Determine if an expression is a function with an allocatable class array
+   result.  */
+bool
+gfc_is_alloc_class_array_function (gfc_expr *expr)
+{
+  if (expr->expr_type == EXPR_FUNCTION
+      && expr->value.function.esym
+      && expr->value.function.esym->result
+      && expr->value.function.esym->result->ts.type == BT_CLASS
+      && CLASS_DATA (expr->value.function.esym->result)->attr.dimension
+      && CLASS_DATA (expr->value.function.esym->result)->attr.allocatable)
+    return true;
+
+  return false;
 }
 
 
@@ -4784,6 +4822,15 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
       return false;
     }
 
+  if (e->ts.type == BT_DERIVED
+      && e->ts.u.derived == NULL)
+    {
+      if (context)
+	gfc_error ("Type inaccessible in variable definition context (%s) "
+		   "at %L", context, &e->where);
+      return false;
+    }
+
   /* F2008, C1303.  */
   if (!alloc_obj
       && (attr.lock_comp
@@ -4936,7 +4983,7 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
       if (!gfc_check_vardef_context (assoc->target, pointer, false, false, NULL))
 	{
 	  if (context)
-	    gfc_error_1 ("Associate-name '%s' can not appear in a variable"
+	    gfc_error ("Associate-name %qs can not appear in a variable"
 		       " definition context (%s) at %L because its target"
 		       " at %L can not, either",
 		       name, context, &e->where,
@@ -4978,12 +5025,12 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
 			  if (gfc_dep_compare_expr (ec, en) == 0)
 			    {
 			      if (context)
-				gfc_error_now_1 ("Elements with the same value "
-						 "at %L and %L in vector "
-						 "subscript in a variable "
-						 "definition context (%s)",
-						 &(ec->where), &(en->where),
-						 context);
+				gfc_error_now ("Elements with the same value "
+					       "at %L and %L in vector "
+					       "subscript in a variable "
+					       "definition context (%s)",
+					       &(ec->where), &(en->where),
+					       context);
 			      return false;
 			    }
 			}

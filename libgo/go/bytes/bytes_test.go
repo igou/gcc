@@ -265,6 +265,23 @@ func TestIndexByte(t *testing.T) {
 	}
 }
 
+func TestLastIndexByte(t *testing.T) {
+	testCases := []BinOpTest{
+		{"", "q", -1},
+		{"abcdef", "q", -1},
+		{"abcdefabcdef", "a", len("abcdef")},      // something in the middle
+		{"abcdefabcdef", "f", len("abcdefabcde")}, // last byte
+		{"zabcdefabcdef", "z", 0},                 // first byte
+		{"a☺b☻c☹d", "b", len("a☺")},               // non-ascii
+	}
+	for _, test := range testCases {
+		actual := LastIndexByte([]byte(test.a), test.b[0])
+		if actual != test.i {
+			t.Errorf("LastIndexByte(%q,%c) = %v; want %v", test.a, test.b[0], actual, test.i)
+		}
+	}
+}
+
 // test a larger buffer with different sizes and alignments
 func TestIndexByteBig(t *testing.T) {
 	var n = 1024
@@ -1230,5 +1247,11 @@ func BenchmarkTrimSpace(b *testing.B) {
 	s := []byte("  Some text.  \n")
 	for i := 0; i < b.N; i++ {
 		TrimSpace(s)
+	}
+}
+
+func BenchmarkRepeat(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Repeat([]byte("-"), 80)
 	}
 }

@@ -1,5 +1,5 @@
 /* Definitions for describing one tree-ssa optimization pass.
-   Copyright (C) 2004-2014 Free Software Foundation, Inc.
+   Copyright (C) 2004-2015 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>
 
 This file is part of GCC.
@@ -163,7 +163,7 @@ public:
 
   /* Hook to convert gimple stmt uids into true gimple statements.  The second
      parameter is an array of statements indexed by their uid. */
-  void (*stmt_fixup) (struct cgraph_node *, gimple *);
+  void (*stmt_fixup) (struct cgraph_node *, gimple **);
 
   /* Results of interprocedural propagation of an IPA pass is applied to
      function body via this hook.  */
@@ -178,7 +178,7 @@ protected:
 		  void (*read_summary) (void),
 		  void (*write_optimization_summary) (void),
 		  void (*read_optimization_summary) (void),
-		  void (*stmt_fixup) (struct cgraph_node *, gimple *),
+		  void (*stmt_fixup) (struct cgraph_node *, gimple **),
 		  unsigned int function_transform_todo_flags_start,
 		  unsigned int (*function_transform) (struct cgraph_node *),
 		  void (*variable_transform) (varpool_node *))
@@ -221,6 +221,11 @@ protected:
 #define PROP_loops		(1 << 11)	/* preserve loop structures */
 #define PROP_gimple_lvec	(1 << 12)       /* lowered vector */
 #define PROP_gimple_eomp	(1 << 13)       /* no OpenMP directives */
+#define PROP_gimple_lva		(1 << 14)       /* No va_arg internal function.  */
+#define PROP_gimple_opt_math	(1 << 15)	/* Disable canonicalization
+						   of math functions; the
+						   current choices have
+						   been optimized.  */
 
 #define PROP_trees \
   (PROP_gimple_any | PROP_gimple_lcf | PROP_gimple_leh | PROP_gimple_lomp)
@@ -295,6 +300,9 @@ protected:
 /* Rebuild the callgraph edges.  */
 #define TODO_rebuild_cgraph_edges       (1 << 22)
 
+/* Release function body and stop pass manager.  */
+#define TODO_discard_function		(1 << 23)
+
 /* Internally used in execute_function_todo().  */
 #define TODO_update_ssa_any		\
     (TODO_update_ssa			\
@@ -334,6 +342,7 @@ extern void register_pass (opt_pass* pass, pass_positioning_ops pos,
 			   const char* ref_pass_name, int ref_pass_inst_number);
 
 extern simple_ipa_opt_pass *make_pass_ipa_chkp_versioning (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_ipa_chkp_early_produce_thunks (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_ipa_chkp_produce_thunks (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_chkp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_chkp_opt (gcc::context *ctxt);
@@ -370,6 +379,7 @@ extern gimple_opt_pass *make_pass_graphite_transforms (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_if_conversion (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_loop_distribution (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_vectorize (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_simduid_cleanup (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_slp_vectorize (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_complete_unroll (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_complete_unrolli (gcc::context *ctxt);
@@ -378,6 +388,7 @@ extern gimple_opt_pass *make_pass_loop_prefetch (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_iv_optimize (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tree_loop_done (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_ch (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_ch_vect (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_ccp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_phi_only_cprop (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_build_ssa (gcc::context *ctxt);
@@ -389,6 +400,7 @@ extern gimple_opt_pass *make_pass_cd_dce (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_call_cdce (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_merge_phi (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_split_crit_edges (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_laddress (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_pre (gcc::context *ctxt);
 extern unsigned int tail_merge_optimize (unsigned int);
 extern gimple_opt_pass *make_pass_profile (gcc::context *ctxt);
@@ -401,6 +413,7 @@ extern gimple_opt_pass *make_pass_lower_omp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_diagnose_omp_blocks (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_expand_omp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_expand_omp_ssa (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_oacc_device_lower (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_object_sizes (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_strlen (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_fold_builtins (gcc::context *ctxt);
@@ -435,6 +448,7 @@ extern gimple_opt_pass *make_pass_remove_cgraph_callee_edges (gcc::context
 							      *ctxt);
 extern gimple_opt_pass *make_pass_build_cgraph_edges (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_local_pure_const (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_nothrow (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tracer (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_warn_unused_result (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_diagnose_tm_blocks (gcc::context *ctxt);
@@ -476,6 +490,8 @@ extern ipa_opt_pass_d *make_pass_ipa_reference (gcc::context *ctxt);
 extern ipa_opt_pass_d *make_pass_ipa_pure_const (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_ipa_pta (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_ipa_tm (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_target_clone (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_dispatcher_calls (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_omp_simd_clone (gcc::context *ctxt);
 extern ipa_opt_pass_d *make_pass_ipa_profile (gcc::context *ctxt);
 extern ipa_opt_pass_d *make_pass_ipa_cdtor_merge (gcc::context *ctxt);
@@ -486,6 +502,7 @@ extern gimple_opt_pass *make_pass_cleanup_cfg_post_optimizing (gcc::context
 							       *ctxt);
 extern gimple_opt_pass *make_pass_init_datastructures (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_fixup_cfg (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_backprop (gcc::context *ctxt);
 
 extern rtl_opt_pass *make_pass_expand (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_instantiate_virtual_regs (gcc::context *ctxt);
@@ -587,6 +604,7 @@ extern gimple_opt_pass *make_pass_early_inline (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_inline_parameters (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_update_address_taken (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_convert_switch (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_lower_vaarg (gcc::context *ctxt);
 
 /* Current optimization pass.  */
 extern opt_pass *current_pass;
@@ -596,14 +614,13 @@ extern void execute_pass_list (function *, opt_pass *);
 extern void execute_ipa_pass_list (opt_pass *);
 extern void execute_ipa_summary_passes (ipa_opt_pass_d *);
 extern void execute_all_ipa_transforms (void);
-extern void execute_all_ipa_stmt_fixups (struct cgraph_node *, gimple *);
+extern void execute_all_ipa_stmt_fixups (struct cgraph_node *, gimple **);
 extern bool pass_init_dump_file (opt_pass *);
 extern void pass_fini_dump_file (opt_pass *);
 
-extern const char *get_current_pass_name (void);
 extern void print_current_pass (FILE *);
 extern void debug_pass (void);
-extern void ipa_write_summaries (bool);
+extern void ipa_write_summaries (void);
 extern void ipa_write_optimization_summaries (struct lto_symtab_encoder_d *);
 extern void ipa_read_summaries (void);
 extern void ipa_read_optimization_summaries (void);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2008-2014 Free Software Foundation, Inc.
+/* Copyright (C) 2008-2015 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -25,6 +25,8 @@
 #define _X86INTRIN_H_INCLUDED
 
 #include <ia32intrin.h>
+
+#ifndef __iamcu__
 
 #include <mmintrin.h>
 
@@ -73,7 +75,11 @@
 
 #include <xsaveoptintrin.h>
 
+#endif /* __iamcu__ */
+
 #include <adxintrin.h>
+
+#ifndef __iamcu__
 
 #include <clwbintrin.h>
 
@@ -84,5 +90,9 @@
 #include <xsavesintrin.h>
 
 #include <xsavecintrin.h>
+
+#include <mwaitxintrin.h>
+
+#endif /* __iamcu__ */
 
 #endif /* _X86INTRIN_H_INCLUDED */

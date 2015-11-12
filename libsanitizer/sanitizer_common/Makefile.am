@@ -3,7 +3,7 @@ AM_CPPFLAGS = -I $(top_srcdir)/include -isystem $(top_srcdir)/include/system
 # May be used by toolexeclibdir.
 gcc_version := $(shell cat $(top_srcdir)/../gcc/BASE-VER)
 
-DEFS = -D_GNU_SOURCE -D_DEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS 
+DEFS = -D_GNU_SOURCE -D_DEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS @RPC_DEFS@
 AM_CXXFLAGS = -Wall -W -Wno-unused-parameter -Wwrite-strings -pedantic -Wno-long-long  -fPIC -fno-builtin -fno-exceptions -fno-rtti -fomit-frame-pointer -funwind-tables -fvisibility=hidden -Wno-variadic-macros
 AM_CXXFLAGS += $(LIBSTDCXX_RAW_CXX_CXXFLAGS)
 AM_CXXFLAGS += -std=gnu++11
@@ -27,6 +27,7 @@ sanitizer_common_files = \
 	sanitizer_deadlock_detector1.cc \
 	sanitizer_deadlock_detector2.cc \
 	sanitizer_flags.cc \
+	sanitizer_flag_parser.cc \
 	sanitizer_libc.cc \
 	sanitizer_libignore.cc \
 	sanitizer_linux.cc \
@@ -45,6 +46,7 @@ sanitizer_common_files = \
 	sanitizer_stackdepot.cc \
 	sanitizer_stacktrace.cc \
 	sanitizer_stacktrace_libcdep.cc \
+	sanitizer_symbolizer_mac.cc \
 	sanitizer_stacktrace_printer.cc \
 	sanitizer_stoptheworld_linux_libcdep.cc \
 	sanitizer_suppressions.cc \
@@ -55,7 +57,7 @@ sanitizer_common_files = \
 	sanitizer_symbolizer_win.cc \
 	sanitizer_thread_registry.cc \
 	sanitizer_tls_get_addr.cc \
-	sanitizer_unwind_posix_libcdep.cc \
+	sanitizer_unwind_linux_libcdep.cc \
 	sanitizer_win.cc
 
 

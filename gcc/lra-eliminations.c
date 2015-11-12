@@ -1,5 +1,5 @@
 /* Code for RTL register eliminations.
-   Copyright (C) 2010-2014 Free Software Foundation, Inc.
+   Copyright (C) 2010-2015 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -54,32 +54,17 @@ along with GCC; see the file COPYING3.	If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "hard-reg-set.h"
+#include "backend.h"
+#include "target.h"
 #include "rtl.h"
+#include "tree.h"
+#include "df.h"
 #include "tm_p.h"
+#include "optabs.h"
 #include "regs.h"
-#include "insn-config.h"
-#include "insn-codes.h"
+#include "ira.h"
 #include "recog.h"
 #include "output.h"
-#include "addresses.h"
-#include "target.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "vec.h"
-#include "machmode.h"
-#include "input.h"
-#include "function.h"
-#include "expr.h"
-#include "predict.h"
-#include "dominance.h"
-#include "cfg.h"
-#include "basic-block.h"
-#include "except.h"
-#include "optabs.h"
-#include "df.h"
-#include "ira.h"
 #include "rtl-error.h"
 #include "lra-int.h"
 
@@ -165,6 +150,8 @@ setup_can_eliminate (struct lra_elim_table *ep, bool value)
   if (! value
       && ep->from == FRAME_POINTER_REGNUM && ep->to == STACK_POINTER_REGNUM)
     frame_pointer_needed = 1;
+  if (!frame_pointer_needed)
+    REGNO_POINTER_ALIGN (HARD_FRAME_POINTER_REGNUM) = 0;
 }
 
 /* Map: eliminable "from" register -> its current elimination,
@@ -212,7 +199,6 @@ setup_elimination_map (void)
 static rtx
 form_sum (rtx x, rtx y)
 {
-  rtx tem;
   machine_mode mode = GET_MODE (x);
 
   if (mode == VOIDmode)
@@ -226,7 +212,7 @@ form_sum (rtx x, rtx y)
   else if (CONST_INT_P (y))
     return plus_constant (mode, x, INTVAL (y));
   else if (CONSTANT_P (x))
-    tem = x, x = y, y = tem;
+    std::swap (x, y);
 
   if (GET_CODE (x) == PLUS && CONSTANT_P (XEXP (x, 1)))
     return form_sum (XEXP (x, 0), form_sum (XEXP (x, 1), y));
@@ -299,7 +285,9 @@ get_elimination (rtx reg)
    substitution if UPDATE_P, or the full offset if FULL_P, or
    otherwise zero.  If FULL_P, we also use the SP offsets for
    elimination to SP.  If UPDATE_P, use UPDATE_SP_OFFSET for updating
-   offsets of register elimnable to SP.
+   offsets of register elimnable to SP.  If UPDATE_SP_OFFSET is
+   non-zero, don't use difference of the offset and the previous
+   offset.
 
    MEM_MODE is the mode of an enclosing MEM.  We need this to know how
    much to adjust a register for, e.g., PRE_DEC.  Also, if we are
@@ -322,7 +310,8 @@ lra_eliminate_regs_1 (rtx_insn *insn, rtx x, machine_mode mem_mode,
   const char *fmt;
   int copied = 0;
 
-  gcc_assert (!update_p || !full_p);
+  lra_assert (!update_p || !full_p);
+  lra_assert (update_sp_offset == 0 || (!subst_p && update_p && !full_p));
   if (! current_function_decl)
     return x;
 
@@ -347,11 +336,14 @@ lra_eliminate_regs_1 (rtx_insn *insn, rtx x, machine_mode mem_mode,
 	{
 	  rtx to = subst_p ? ep->to_rtx : ep->from_rtx;
 
-	  if (update_p)
-	    return plus_constant (Pmode, to,
-				  ep->offset - ep->previous_offset
-				  + (ep->to_rtx == stack_pointer_rtx
-				     ? update_sp_offset : 0));
+	  if (update_sp_offset != 0)
+	    {
+	      if (ep->to_rtx == stack_pointer_rtx)
+		return plus_constant (Pmode, to, update_sp_offset);
+	      return to;
+	    }
+	  else if (update_p)
+	    return plus_constant (Pmode, to, ep->offset - ep->previous_offset);
 	  else if (full_p)
 	    return plus_constant (Pmode, to,
 				  ep->offset
@@ -376,16 +368,15 @@ lra_eliminate_regs_1 (rtx_insn *insn, rtx x, machine_mode mem_mode,
 
 	      if (! update_p && ! full_p)
 		return gen_rtx_PLUS (Pmode, to, XEXP (x, 1));
-
-	      offset = (update_p
-			? ep->offset - ep->previous_offset
-			+ (ep->to_rtx == stack_pointer_rtx
-			   ? update_sp_offset : 0)
-			: ep->offset);
+	      
+	      if (update_sp_offset != 0)
+		offset = ep->to_rtx == stack_pointer_rtx ? update_sp_offset : 0;
+	      else
+		offset = (update_p
+			  ? ep->offset - ep->previous_offset : ep->offset);
 	      if (full_p && insn != NULL_RTX && ep->to_rtx == stack_pointer_rtx)
 		offset -= lra_get_insn_recog_data (insn)->sp_offset;
-	      if (CONST_INT_P (XEXP (x, 1))
-		  && INTVAL (XEXP (x, 1)) == -offset)
+	      if (CONST_INT_P (XEXP (x, 1)) && INTVAL (XEXP (x, 1)) == -offset)
 		return to;
 	      else
 		return gen_rtx_PLUS (Pmode, to,
@@ -432,12 +423,18 @@ lra_eliminate_regs_1 (rtx_insn *insn, rtx x, machine_mode mem_mode,
 	{
 	  rtx to = subst_p ? ep->to_rtx : ep->from_rtx;
 
-	  if (update_p)
+	  if (update_sp_offset != 0)
+	    {
+	      if (ep->to_rtx == stack_pointer_rtx)
+		return plus_constant (Pmode,
+				      gen_rtx_MULT (Pmode, to, XEXP (x, 1)),
+				      update_sp_offset * INTVAL (XEXP (x, 1)));
+	      return gen_rtx_MULT (Pmode, to, XEXP (x, 1));
+	    }
+	  else if (update_p)
 	    return plus_constant (Pmode,
 				  gen_rtx_MULT (Pmode, to, XEXP (x, 1)),
-				  (ep->offset - ep->previous_offset
-				   + (ep->to_rtx == stack_pointer_rtx
-				      ? update_sp_offset : 0))
+				  (ep->offset - ep->previous_offset)
 				  * INTVAL (XEXP (x, 1)));
 	  else if (full_p)
 	    {
@@ -843,7 +840,7 @@ mark_not_eliminable (rtx x, machine_mode mem_mode)
    found elmination offset.  If the note is not found, return NULL.
    Remove the found note.  */
 static rtx
-remove_reg_equal_offset_note (rtx insn, rtx what)
+remove_reg_equal_offset_note (rtx_insn *insn, rtx what)
 {
   rtx link, *link_loc;
 
@@ -870,11 +867,12 @@ remove_reg_equal_offset_note (rtx insn, rtx what)
 
    If REPLACE_P is false, just update the offsets while keeping the
    base register the same.  If FIRST_P, use the sp offset for
-   elimination to sp.  Otherwise, use UPDATE_SP_OFFSET for this.
-   Attach the note about used elimination for insns setting frame
-   pointer to update elimination easy (without parsing already
-   generated elimination insns to find offset previously used) in
-   future.  */
+   elimination to sp.  Otherwise, use UPDATE_SP_OFFSET for this.  If
+   UPDATE_SP_OFFSET is non-zero, don't use difference of the offset
+   and the previous offset.  Attach the note about used elimination
+   for insns setting frame pointer to update elimination easy (without
+   parsing already generated elimination insns to find offset
+   previously used) in future.  */
 
 void
 eliminate_regs_in_insn (rtx_insn *insn, bool replace_p, bool first_p,
@@ -920,6 +918,10 @@ eliminate_regs_in_insn (rtx_insn *insn, bool replace_p, bool first_p,
 	      {
 		rtx src = SET_SRC (old_set);
 		rtx off = remove_reg_equal_offset_note (insn, ep->to_rtx);
+		
+		/* We should never process such insn with non-zero
+		   UPDATE_SP_OFFSET.  */
+		lra_assert (update_sp_offset == 0);
 		
 		if (off != NULL_RTX
 		    || src == ep->to_rtx
@@ -1007,7 +1009,8 @@ eliminate_regs_in_insn (rtx_insn *insn, bool replace_p, bool first_p,
 
 	  if (! replace_p)
 	    {
-	      offset += (ep->offset - ep->previous_offset);
+	      if (update_sp_offset == 0)
+		offset += (ep->offset - ep->previous_offset);
 	      if (ep->to_rtx == stack_pointer_rtx)
 		{
 		  if (first_p)
@@ -1040,8 +1043,7 @@ eliminate_regs_in_insn (rtx_insn *insn, bool replace_p, bool first_p,
 		 constraint pass fix it up.  */
 	      if (! validate_change (insn, &SET_SRC (old_set), new_src, 0))
 		{
-		  rtx new_pat = gen_rtx_SET (VOIDmode,
-					     SET_DEST (old_set), new_src);
+		  rtx new_pat = gen_rtx_SET (SET_DEST (old_set), new_src);
 
 		  if (! validate_change (insn, &PATTERN (insn), new_pat, 0))
 		    SET_SRC (old_set) = new_src;
@@ -1418,11 +1420,11 @@ lra_eliminate (bool final_p, bool first_p)
   bitmap_initialize (&insns_with_changed_offsets, &reg_obstack);
   if (final_p)
     {
-#ifdef ENABLE_CHECKING
-      update_reg_eliminate (&insns_with_changed_offsets);
-      if (! bitmap_empty_p (&insns_with_changed_offsets))
-	gcc_unreachable ();
-#endif
+      if (flag_checking)
+	{
+	  update_reg_eliminate (&insns_with_changed_offsets);
+	  gcc_assert (bitmap_empty_p (&insns_with_changed_offsets));
+	}
       /* We change eliminable hard registers in insns so we should do
 	 this for all insns containing any eliminable hard
 	 register.  */

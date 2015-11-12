@@ -1,5 +1,5 @@
 /* Conversion of SESE regions to Polyhedra.
-   Copyright (C) 2009-2014 Free Software Foundation, Inc.
+   Copyright (C) 2009-2015 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <sebastian.pop@amd.com>.
 
 This file is part of GCC.
@@ -20,12 +20,6 @@ along with GCC; see the file COPYING3.  If not see
 
 #ifndef GCC_GRAPHITE_SESE_TO_POLY_H
 #define GCC_GRAPHITE_SESE_TO_POLY_H
-
-struct base_alias_pair
-{
-  int base_obj_set;
-  int *alias_set;
-};
 
 void build_poly_scop (scop_p);
 

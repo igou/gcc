@@ -1,5 +1,5 @@
 /* RTL dead code elimination.
-   Copyright (C) 2005-2014 Free Software Foundation, Inc.
+   Copyright (C) 2005-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,29 +20,20 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "hashtab.h"
-#include "tm.h"
+#include "backend.h"
 #include "rtl.h"
 #include "tree.h"
-#include "regs.h"
-#include "hard-reg-set.h"
-#include "flags.h"
-#include "except.h"
-#include "dominance.h"
-#include "cfg.h"
+#include "predict.h"
+#include "df.h"
+#include "tm_p.h"
+#include "emit-rtl.h"  /* FIXME: Can go away once crtl is moved to rtl.h.  */
 #include "cfgrtl.h"
 #include "cfgbuild.h"
 #include "cfgcleanup.h"
-#include "predict.h"
-#include "basic-block.h"
-#include "df.h"
-#include "cselib.h"
 #include "dce.h"
 #include "valtrack.h"
 #include "tree-pass.h"
 #include "dbgcnt.h"
-#include "tm_p.h"
-#include "emit-rtl.h"  /* FIXME: Can go away once crtl is moved to rtl.h.  */
 
 
 /* -------------------------------------------------------------------------

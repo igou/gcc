@@ -1,3 +1,95 @@
+2015-11-09  Torvald Riegel  <triegel@redhat.com>
+
+	* alloc_cpp.cc (_ZdlPvX, _ZdlPvXRKSt9nothrow_t, _ZGTtdlPvX,
+	_ZGTtdlPvXRKSt9nothrow_t, delsz_opnt): New.
+	* libitm.map: Add _ZGTtdlPvX and _ZGTtdlPvXRKSt9nothrow_t.
+	* libitm_i.h (gtm_alloc_action): Add free_fn_sz and sz.  Add comments.
+	(gtm_thread::forget_allocations): New overload with size_t argument.
+	* alloc.c (gtm_thread::forget_allocation): Define new overload and
+	adapt existing one.
+	(gtm_thread::record_allocation): Adapt.
+	(gtm_thread::commit_allocations_1): Adapt.
+	(gtm_thread::commit_allocations_2): Adapt.
+	* testsuite/libitm.c++/newdelete.C: New.
+
+2015-10-27  Daniel Jacobowitz  <dan@codesourcery.com>
+	    Joseph Myers  <joseph@codesourcery.com>
+	    Mark Shinwell  <shinwell@codesourcery.com>
+	    Andrew Stubbs  <ams@codesourcery.com>
+	    Rich Felker <dalias@libc.org>
+
+	* config/sh/sjlj.S (_ITM_beginTransaction): Bypass PLT calling
+	GTM_begin_transaction for compatibility with FDPIC.
+
+2015-10-09  David Malcolm  <dmalcolm@redhat.com>
+
+	* testsuite/lib/libitm.exp: Load multiline.exp before prune.exp,
+	using load_gcc_lib.
+
+2015-08-20  Gleb Fotengauer-Malinovskiy  <glebfm@altlinux.org>  (tiny change)
+
+	PR libitm/61164
+	* local_atomic (__always_inline): Rename to...
+	(__libitm_always_inline): ... this.
+
+2015-07-03  Carlos Sánchez de La Lama  <csanchezdll@gmail.com>
+
+	PR target/52482
+	* config/powerpc/sjlj.S: Port to Xcode 2.5.
+
+2015-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* config/linux/x86/futex_bits.h (sys_futex0) [__x86_64__]: Change
+	operands "op" and "val" to int.
+
+2015-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* config/linux/sh/futex_bits.h (sys_futex0) Change operands
+	"op" and "val" to int.
+
+2015-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* config/linux/alpha/futex_bits.h (sys_futex0) Change operands
+	"op" and "val" to int.
+
+2015-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* config/linux/futex.cc (gtm_futex_wait, gtm_futex_wake):
+	Declare as static int.
+	(FUTEX_PRIVATE_FLAG): Remove L suffix.
+	* config/linux/futex_bits.h (sys_futex0) Change operand "op" to int.
+
+2015-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* config/linux/x86/futex_bits.h (sys_futex0) [__PIC__]: Remove
+	sys_futex0 function.
+
+2015-05-13  Michael Haubenwallner  <michael.haubenwallner@ssi-schaefer.com>
+
+	* Makefile.in: Regenerated with automake-1.11.6.
+	* aclocal.m4: Likewise.
+	* configure: Likewise.
+	* testsuite/Makefile.in: Likewise.
+
+2015-04-22  Gregor Richards  <gregor.richards@uwaterloo.ca>
+
+	* config/arm/hwcap.cc: Use fcntl.h instead of sys/fcntl.h.
+	* config/linux/x86/tls.h: Only use __GLIBC_PREREQ if defined.
+
+2015-01-15  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR libitm/64360
+	* libitm.c/stackundo.c (test2): Make it static.
+	(test1): Likewise.
+
+2015-01-05  Jakub Jelinek  <jakub@redhat.com>
+
+	Update copyright years.
+
+2015-01-05  Jakub Jelinek  <jakub@redhat.com>
+
+	* libitm.texi: Bump @copying's copyright year.
+
 2014-12-12  Kyrylo Tkachov  <kyrylo.tkachov@arm.com>
 
 	* testsuite/lib/libitm.exp: Load target-utils.exp.

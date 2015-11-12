@@ -9,8 +9,17 @@ package http
 
 import (
 	"net"
+	"net/url"
+	"sync"
 	"time"
 )
+
+func init() {
+	// We only want to pay for this cost during testing.
+	// When not under test, these values are always nil
+	// and never assigned to.
+	testHookMu = new(sync.Mutex)
+}
 
 func NewLoggingConn(baseName string, c net.Conn) net.Conn {
 	return newLoggingConn(baseName, c)
@@ -57,6 +66,40 @@ func (t *Transport) IdleConnChMapSizeForTesting() int {
 	return len(t.idleConnCh)
 }
 
+func (t *Transport) IsIdleForTesting() bool {
+	t.idleMu.Lock()
+	defer t.idleMu.Unlock()
+	return t.wantIdle
+}
+
+func (t *Transport) RequestIdleConnChForTesting() {
+	t.getIdleConnCh(connectMethod{nil, "http", "example.com"})
+}
+
+func (t *Transport) PutIdleTestConn() bool {
+	c, _ := net.Pipe()
+	return t.putIdleConn(&persistConn{
+		t:        t,
+		conn:     c,                   // dummy
+		closech:  make(chan struct{}), // so it can be closed
+		cacheKey: connectMethodKey{"", "http", "example.com"},
+	})
+}
+
+func SetInstallConnClosedHook(f func()) {
+	testHookPersistConnClosedGotRes = f
+}
+
+func SetEnterRoundTripHook(f func()) {
+	testHookEnterRoundTrip = f
+}
+
+func SetReadLoopBeforeNextReadHook(f func()) {
+	testHookMu.Lock()
+	defer testHookMu.Unlock()
+	testHookReadLoopBeforeNextRead = f
+}
+
 func NewTestTimeoutHandler(handler Handler, ch <-chan time.Time) Handler {
 	f := func() <-chan time.Time {
 		return ch
@@ -66,7 +109,24 @@ func NewTestTimeoutHandler(handler Handler, ch <-chan time.Time) Handler {
 
 func ResetCachedEnvironment() {
 	httpProxyEnv.reset()
+	httpsProxyEnv.reset()
 	noProxyEnv.reset()
 }
 
 var DefaultUserAgent = defaultUserAgent
+
+func ExportRefererForURL(lastReq, newReq *url.URL) string {
+	return refererForURL(lastReq, newReq)
+}
+
+// SetPendingDialHooks sets the hooks that run before and after handling
+// pending dials.
+func SetPendingDialHooks(before, after func()) {
+	prePendingDial, postPendingDial = before, after
+}
+
+var ExportServerNewConn = (*Server).newConn
+
+var ExportCloseWriteAndWait = (*conn).closeWriteAndWait
+
+var ExportErrRequestCanceled = errRequestCanceled

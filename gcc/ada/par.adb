@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -951,6 +951,9 @@ function Par (Configuration_Pragmas : Boolean) return List_Id is
       --  permitted). Note: this routine never checks the terminator token
       --  for aspects so it does not matter whether the aspect specifications
       --  are terminated by semicolon or some other character.
+      --
+      --  Note: This function also handles the case of WHEN used where WITH
+      --  was intended, and in that case posts an error and returns True.
 
       procedure P_Aspect_Specifications
         (Decl      : Node_Id;
@@ -960,15 +963,17 @@ function Par (Configuration_Pragmas : Boolean) return List_Id is
       --  argument is False, the scan pointer is left pointing past the aspects
       --  and the caller must check for a proper terminator.
       --
-      --  P_Aspect_Specifications is called with the current token pointing to
-      --  either a WITH keyword starting an aspect specification, or an
-      --  instance of the terminator token. In the former case, the aspect
-      --  specifications are scanned out including the terminator token if it
-      --  it is a semicolon, and the Has_Aspect_Specifications flag is set in
-      --  the given declaration node. A list of aspects is built and stored for
-      --  this declaration node using a call to Set_Aspect_Specifications. If
-      --  no WITH keyword is present, then this call has no effect other than
-      --  scanning out the terminator if it is a semicolon.
+      --  P_Aspect_Specifications is called with the current token pointing
+      --  to either a WITH keyword starting an aspect specification, or an
+      --  instance of what shpould be a terminator token. In the former case,
+      --  the aspect specifications are scanned out including the terminator
+      --  token if it is a semicolon, and the Has_Aspect_Specifications
+      --  flag is set in the given declaration node. A list of aspects
+      --  is built and stored for this declaration node using a call to
+      --  Set_Aspect_Specifications. If no WITH keyword is present, then this
+      --  call has no effect other than scanning out the terminator if it is a
+      --  semicolon (with the exception that it detects WHEN used in place of
+      --  WITH).
 
       --  If Decl is Error on entry, any scanned aspect specifications are
       --  ignored and a message is output saying aspect specifications not
@@ -1572,11 +1577,14 @@ begin
                --  versions of these files. Another exception is System.RPC
                --  and its children. This allows a user to supply their own
                --  communication layer.
+               --  Similarly, we do not generate an error in CodePeer mode,
+               --  to allow users to analyze third-party compiler packages.
 
                if Comp_Unit_Node /= Error
                  and then Operating_Mode = Generate_Code
                  and then Current_Source_Unit = Main_Unit
                  and then not GNAT_Mode
+                 and then not CodePeer_Mode
                then
                   declare
                      Uname : constant String :=
@@ -1658,7 +1666,7 @@ begin
       --  Here we make the SCO table entries for the main unit
 
       if Generate_SCO then
-         SCO_Record (Main_Unit);
+         SCO_Record_Raw (Main_Unit);
       end if;
 
       --  Remaining steps are to create implicit label declarations and to load

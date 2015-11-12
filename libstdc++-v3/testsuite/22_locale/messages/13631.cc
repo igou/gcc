@@ -1,6 +1,6 @@
 // { dg-require-namedlocale "fr_FR" }
 
-// Copyright (C) 2014 Free Software Foundation
+// Copyright (C) 2014-2015 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -57,6 +57,7 @@ void test01()
 
 void test02()
 {
+#ifdef _GLIBCXX_USE_WCHAR_T
   bool test __attribute__((unused)) = true;
 
   // This is defined through CXXFLAGS in scripts/testsuite_flags[.in].
@@ -89,6 +90,7 @@ void test02()
   msgs_facet.close(msgs);
 
   VERIFY( translation1 == translation2 );
+#endif
 }
 
 int main()

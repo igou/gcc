@@ -2,12 +2,11 @@
 --                                                                          --
 --                         GNAT LIBRARY COMPONENTS                          --
 --                                                                          --
---                          A D A . C O N T A I N E R S
---           . F O R M A L _ I N D E F I N I T E _ V E C T O R S            --
+--                 ADA.CONTAINERS.FORMAL_INDEFINITE_VECTORS                 --
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---             Copyright (C) 2014, Free Software Foundation, Inc.           --
+--          Copyright (C) 2014-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -29,7 +28,6 @@
 package body Ada.Containers.Formal_Indefinite_Vectors with
   SPARK_Mode => Off
 is
-   pragma Annotate (CodePeer, Skip_Analysis);
 
    function H (New_Item : Element_Type) return Holder renames To_Holder;
    function E (Container : Holder) return Element_Type renames Get;
@@ -89,7 +87,8 @@ is
 
    function Contains
      (Container : Vector;
-      Item      : Element_Type) return Boolean is
+      Item      : Element_Type) return Boolean
+   is
      (Contains (Container.V, H (Item)));
 
    ----------
@@ -98,8 +97,10 @@ is
 
    function Copy
      (Source   : Vector;
-      Capacity : Capacity_Range := 0) return Vector is
-     (Capacity, V => Copy (Source.V, Capacity));
+      Capacity : Capacity_Range := 0) return Vector
+   is
+     ((if Capacity = 0 then Length (Source) else Capacity),
+       V => Copy (Source.V, Capacity));
 
    ---------------------
    -- Current_To_Last --
@@ -139,7 +140,8 @@ is
    function Find_Index
      (Container : Vector;
       Item      : Element_Type;
-      Index     : Index_Type := Index_Type'First) return Extended_Index is
+      Index     : Index_Type := Index_Type'First) return Extended_Index
+   is
      (Find_Index (Container.V, H (Item), Index));
 
    -------------------
@@ -171,7 +173,7 @@ is
    -- Generic_Sorting --
    ---------------------
 
-   package body Generic_Sorting is
+   package body Generic_Sorting with SPARK_Mode => Off is
 
       function "<" (X, Y : Holder) return Boolean is (E (X) < E (Y));
       package Def_Sorting is new Def.Generic_Sorting ("<");
@@ -200,7 +202,9 @@ is
    -----------------
 
    function Has_Element
-     (Container : Vector; Position : Extended_Index) return Boolean is
+     (Container : Vector;
+      Position  : Extended_Index) return Boolean
+   is
      (Has_Element (Container.V, Position));
 
    --------------
@@ -272,7 +276,8 @@ is
    function Reverse_Find_Index
      (Container : Vector;
       Item      : Element_Type;
-      Index     : Index_Type := Index_Type'Last) return Extended_Index is
+      Index     : Index_Type := Index_Type'Last) return Extended_Index
+   is
      (Reverse_Find_Index (Container.V, H (Item), Index));
 
    ----------
@@ -290,7 +295,8 @@ is
 
    function To_Vector
      (New_Item : Element_Type;
-      Length   : Capacity_Range) return Vector is
+      Length   : Capacity_Range) return Vector
+   is
    begin
       return (Length, To_Vector (H (New_Item), Length));
    end To_Vector;

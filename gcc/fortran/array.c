@@ -1,5 +1,5 @@
 /* Array things
-   Copyright (C) 2000-2014 Free Software Foundation, Inc.
+   Copyright (C) 2000-2015 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -21,6 +21,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "options.h"
 #include "gfortran.h"
 #include "match.h"
 #include "constructor.h"
@@ -145,9 +146,9 @@ matched:
 }
 
 
-/* Match an array reference, whether it is the whole array or a
-   particular elements or a section. If init is set, the reference has
-   to consist of init expressions.  */
+/* Match an array reference, whether it is the whole array or particular
+   elements or a section.  If init is set, the reference has to consist
+   of init expressions.  */
 
 match
 gfc_match_array_ref (gfc_array_ref *ar, gfc_array_spec *as, int init,
@@ -207,7 +208,7 @@ coarray:
 	return MATCH_ERROR;
     }
 
-  if (gfc_option.coarray == GFC_FCOARRAY_NONE)
+  if (flag_coarray == GFC_FCOARRAY_NONE)
     {
       gfc_fatal_error ("Coarrays disabled at %C, use %<-fcoarray=%> to enable");
       return MATCH_ERROR;
@@ -337,6 +338,9 @@ gfc_resolve_array_spec (gfc_array_spec *as, int check_constant)
   if (as == NULL)
     return true;
 
+  if (as->resolved)
+    return true;
+
   for (i = 0; i < as->rank + as->corank; i++)
     {
       e = as->lower[i];
@@ -362,6 +366,8 @@ gfc_resolve_array_spec (gfc_array_spec *as, int check_constant)
 		      as->upper[i]->value.integer, 1);
 	}
     }
+
+  as->resolved = true;
 
   return true;
 }
@@ -415,6 +421,13 @@ match_array_element_spec (gfc_array_spec *as)
   if (!gfc_expr_check_typed (*upper, gfc_current_ns, false))
     return AS_UNKNOWN;
 
+  if ((*upper)->expr_type == EXPR_FUNCTION && (*upper)->ts.type == BT_UNKNOWN
+      && (*upper)->symtree && strcmp ((*upper)->symtree->name, "null") == 0)
+    {
+      gfc_error ("Expecting a scalar INTEGER expression at %C");
+      return AS_UNKNOWN;
+    }
+
   if (gfc_match_char (':') == MATCH_NO)
     {
       *lower = gfc_get_int_expr (gfc_default_integer_kind, NULL, 1);
@@ -435,13 +448,20 @@ match_array_element_spec (gfc_array_spec *as)
   if (!gfc_expr_check_typed (*upper, gfc_current_ns, false))
     return AS_UNKNOWN;
 
+  if ((*upper)->expr_type == EXPR_FUNCTION && (*upper)->ts.type == BT_UNKNOWN
+      && (*upper)->symtree && strcmp ((*upper)->symtree->name, "null") == 0)
+    {
+      gfc_error ("Expecting a scalar INTEGER expression at %C");
+      return AS_UNKNOWN;
+    }
+
   return AS_EXPLICIT;
 }
 
 
 /* Matches an array specification, incidentally figuring out what sort
-   it is. Match either a normal array specification, or a coarray spec
-   or both. Optionally allow [:] for coarrays.  */
+   it is.  Match either a normal array specification, or a coarray spec
+   or both.  Optionally allow [:] for coarrays.  */
 
 match
 gfc_match_array_spec (gfc_array_spec **asp, bool match_dim, bool match_codim)
@@ -590,7 +610,7 @@ coarray:
   if (!gfc_notify_std (GFC_STD_F2008, "Coarray declaration at %C"))
     goto cleanup;
 
-  if (gfc_option.coarray == GFC_FCOARRAY_NONE)
+  if (flag_coarray == GFC_FCOARRAY_NONE)
     {
       gfc_fatal_error ("Coarrays disabled at %C, use %<-fcoarray=%> to enable");
       goto cleanup;
@@ -1073,7 +1093,8 @@ gfc_match_array_constructor (gfc_expr **result)
   /* Try to match an optional "type-spec ::"  */
   gfc_clear_ts (&ts);
   gfc_new_undo_checkpoint (changed_syms);
-  if (gfc_match_type_spec (&ts) == MATCH_YES)
+  m = gfc_match_type_spec (&ts);
+  if (m == MATCH_YES)
     {
       seen_ts = (gfc_match (" ::") == MATCH_YES);
 
@@ -1094,6 +1115,11 @@ gfc_match_array_constructor (gfc_expr **result)
 	      goto cleanup;
 	    }
 	}
+    }
+  else if (m == MATCH_ERROR)
+    {
+      gfc_restore_last_undo_checkpoint ();
+      goto cleanup;
     }
 
   if (seen_ts)
@@ -1307,6 +1333,9 @@ check_constructor (gfc_constructor_base ctor, bool (*check_function) (gfc_expr *
   for (c = gfc_constructor_first (ctor); c; c = gfc_constructor_next (c))
     {
       e = c->expr;
+
+      if (!e)
+	continue;
 
       if (e->expr_type != EXPR_ARRAY)
 	{
@@ -1654,7 +1683,7 @@ gfc_expand_constructor (gfc_expr *e, bool fatal)
 
   /* If we can successfully get an array element at the max array size then
      the array is too big to expand, so we just return.  */
-  f = gfc_get_array_element (e, gfc_option.flag_max_array_constructor);
+  f = gfc_get_array_element (e, flag_max_array_constructor);
   if (f != NULL)
     {
       gfc_free_expr (f);
@@ -1663,8 +1692,7 @@ gfc_expand_constructor (gfc_expr *e, bool fatal)
 	  gfc_error ("The number of elements in the array constructor "
 		     "at %L requires an increase of the allowed %d "
 		     "upper limit.   See %<-fmax-array-constructor%> "
-		     "option", &e->where,
-		     gfc_option.flag_max_array_constructor);
+		     "option", &e->where, flag_max_array_constructor);
 	  return false;
 	}
       return true;
@@ -2193,7 +2221,8 @@ gfc_ref_dimen_size (gfc_array_ref *ar, int dimen, mpz_t *result, mpz_t *end)
       if (ar->start[dimen] == NULL)
 	{
 	  if (ar->as->lower[dimen] == NULL
-	      || ar->as->lower[dimen]->expr_type != EXPR_CONSTANT)
+	      || ar->as->lower[dimen]->expr_type != EXPR_CONSTANT
+	      || ar->as->lower[dimen]->ts.type != BT_INTEGER)
 	    goto cleanup;
 	  mpz_set (lower, ar->as->lower[dimen]->value.integer);
 	}
@@ -2207,7 +2236,8 @@ gfc_ref_dimen_size (gfc_array_ref *ar, int dimen, mpz_t *result, mpz_t *end)
       if (ar->end[dimen] == NULL)
 	{
 	  if (ar->as->upper[dimen] == NULL
-	      || ar->as->upper[dimen]->expr_type != EXPR_CONSTANT)
+	      || ar->as->upper[dimen]->expr_type != EXPR_CONSTANT
+	      || ar->as->upper[dimen]->ts.type != BT_INTEGER)
 	    goto cleanup;
 	  mpz_set (upper, ar->as->upper[dimen]->value.integer);
 	}

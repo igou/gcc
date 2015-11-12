@@ -1,5 +1,5 @@
 /* Dwarf2 assembler output helper routines.
-   Copyright (C) 2001-2014 Free Software Foundation, Inc.
+   Copyright (C) 2001-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -21,19 +21,19 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
-#include "tm.h"
-#include "flags.h"
+#include "target.h"
+#include "rtl.h"
 #include "tree.h"
+#include "tm_p.h"
 #include "stringpool.h"
 #include "varasm.h"
-#include "rtl.h"
 #include "output.h"
-#include "target.h"
 #include "dwarf2asm.h"
 #include "dwarf2.h"
-#include "hash-map.h"
-#include "ggc.h"
-#include "tm_p.h"
+
+#ifndef XCOFF_DEBUGGING_INFO
+#define XCOFF_DEBUGGING_INFO 0
+#endif
 
 
 /* Output an unaligned integer with the given value and size.  Prefer not
@@ -149,6 +149,7 @@ dw2_asm_output_delta (int size, const char *lab1, const char *lab2,
   va_end (ap);
 }
 
+#ifdef ASM_OUTPUT_DWARF_VMS_DELTA
 /* Output the difference between two symbols in instruction units
    in a given size.  */
 
@@ -161,11 +162,6 @@ dw2_asm_output_vms_delta (int size ATTRIBUTE_UNUSED,
 
   va_start (ap, comment);
 
-#ifndef ASM_OUTPUT_DWARF_VMS_DELTA
-  /* VMS Delta is only special on ia64-vms, but this function also gets
-     called on alpha-vms so it has to do something sane.  */
-  dw2_asm_output_delta (size, lab1, lab2, comment);
-#else
   ASM_OUTPUT_DWARF_VMS_DELTA (asm_out_file, size, lab1, lab2);
   if (flag_debug_asm && comment)
     {
@@ -173,10 +169,10 @@ dw2_asm_output_vms_delta (int size ATTRIBUTE_UNUSED,
       vfprintf (asm_out_file, comment, ap);
     }
   fputc ('\n', asm_out_file);
-#endif
 
   va_end (ap);
 }
+#endif
 
 /* Output a section-relative reference to a LABEL, which was placed in
    BASE.  In general this can only be done for debugging symbols.
@@ -311,7 +307,11 @@ dw2_asm_output_nstring (const char *str, size_t orig_len,
 
   if (flag_debug_asm && comment)
     {
-      fputs ("\t.ascii \"", asm_out_file);
+      if (XCOFF_DEBUGGING_INFO)
+	fputs ("\t.byte \"", asm_out_file);
+      else
+	fputs ("\t.ascii \"", asm_out_file);
+
       for (i = 0; i < len; i++)
 	{
 	  int c = str[i];
@@ -925,9 +925,9 @@ dw2_output_indirect_constants (void)
        iter != indirect_pool->end (); ++iter)
     temp.quick_push (*iter);
 
-    temp.qsort (compare_strings);
+  temp.qsort (compare_strings);
 
-    for (unsigned int i = 0; i < temp.length (); i++)
+  for (unsigned int i = 0; i < temp.length (); i++)
     dw2_output_indirect_constant_1 (temp[i].first, temp[i].second);
 }
 
@@ -988,6 +988,13 @@ dw2_asm_output_encoded_addr_rtx (int encoding, rtx addr, bool is_public,
 	case DW_EH_PE_absptr:
 	  dw2_assemble_integer (size, addr);
 	  break;
+
+#ifdef ASM_OUTPUT_DWARF_DATAREL
+	case DW_EH_PE_datarel:
+	  gcc_assert (GET_CODE (addr) == SYMBOL_REF);
+	  ASM_OUTPUT_DWARF_DATAREL (asm_out_file, size, XSTR (addr, 0));
+	  break;
+#endif
 
 	case DW_EH_PE_pcrel:
 	  gcc_assert (GET_CODE (addr) == SYMBOL_REF);

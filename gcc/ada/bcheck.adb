@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2015, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -170,7 +170,7 @@ package body Bcheck is
                goto Continue;
             end if;
 
-            Src := Source_Id (Get_Name_Table_Info (Sdep.Table (D).Sfile));
+            Src := Source_Id (Get_Name_Table_Int (Sdep.Table (D).Sfile));
 
             --  If the time stamps match, or all checksums match, then we
             --  are OK, otherwise we have a definite error.
@@ -468,12 +468,12 @@ package body Bcheck is
                         WR : With_Record renames Withs.Table (W);
 
                      begin
-                        if Get_Name_Table_Info (WR.Uname) /= 0 then
+                        if Get_Name_Table_Int (WR.Uname) /= 0 then
                            declare
                               WU : Unit_Record renames
                                      Units.Table
                                        (Unit_Id
-                                         (Get_Name_Table_Info (WR.Uname)));
+                                         (Get_Name_Table_Int (WR.Uname)));
 
                            begin
                               --  Case 1. Elaborate_All for with'ed unit
@@ -639,9 +639,9 @@ package body Bcheck is
    -- Check_Consistent_Normalize_Scalars --
    ----------------------------------------
 
-   --  The rule is that if any unit is compiled with Normalized_Scalars,
+   --  The rule is that if any unit is compiled with Normalize_Scalars,
    --  then all other units in the partition must also be compiled with
-   --  Normalized_Scalars in effect.
+   --  Normalize_Scalars in effect.
 
    --  There is some issue as to whether this consistency check is desirable,
    --  it is certainly required at the moment by the RM. We should keep a watch
@@ -1048,7 +1048,7 @@ package body Bcheck is
                      if AFN /= No_File then
                         declare
                            WAI : constant ALI_Id :=
-                             ALI_Id (Get_Name_Table_Info (AFN));
+                             ALI_Id (Get_Name_Table_Int (AFN));
                            WTE : ALIs_Record renames ALIs.Table (WAI);
 
                         begin
@@ -1199,7 +1199,7 @@ package body Bcheck is
 
                declare
                   Unit : constant Unit_Name_Type := Name_Find;
-                  Info : constant Int := Get_Name_Table_Info (Unit);
+                  Info : constant Int := Get_Name_Table_Int (Unit);
 
                begin
                   if Info /= 0 then

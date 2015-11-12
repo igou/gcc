@@ -116,10 +116,9 @@ func (e UnknownAuthorityError) Error() string {
 }
 
 // SystemRootsError results when we fail to load the system root certificates.
-type SystemRootsError struct {
-}
+type SystemRootsError struct{}
 
-func (e SystemRootsError) Error() string {
+func (SystemRootsError) Error() string {
 	return "x509: failed to load system roots and no roots provided"
 }
 
@@ -206,11 +205,18 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 // needed. If successful, it returns one or more chains where the first
 // element of the chain is c and the last element is from opts.Roots.
 //
+// If opts.Roots is nil and system roots are unavailable the returned error
+// will be of type SystemRootsError.
+//
 // WARNING: this doesn't do any revocation checking.
 func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err error) {
 	// Use Windows's own verification and chain building.
 	if opts.Roots == nil && runtime.GOOS == "windows" {
 		return c.systemVerify(&opts)
+	}
+
+	if len(c.UnhandledCriticalExtensions) > 0 {
+		return nil, UnhandledCriticalExtension{}
 	}
 
 	if opts.Roots == nil {
@@ -321,6 +327,9 @@ nextIntermediate:
 }
 
 func matchHostnames(pattern, host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	pattern = strings.TrimSuffix(pattern, ".")
+
 	if len(pattern) == 0 || len(host) == 0 {
 		return false
 	}
@@ -333,7 +342,7 @@ func matchHostnames(pattern, host string) bool {
 	}
 
 	for i, patternPart := range patternParts {
-		if patternPart == "*" {
+		if i == 0 && patternPart == "*" {
 			continue
 		}
 		if patternPart != hostParts[i] {

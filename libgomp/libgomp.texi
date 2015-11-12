@@ -7,7 +7,7 @@
 
 
 @copying
-Copyright @copyright{} 2006-2014 Free Software Foundation, Inc.
+Copyright @copyright{} 2006-2015 Free Software Foundation, Inc.
 
 Permission is granted to copy, distribute and/or modify this document
 under the terms of the GNU Free Documentation License, Version 1.3 or
@@ -31,11 +31,13 @@ texts being (a) (see below), and with the Back-Cover Texts being (b)
 @ifinfo
 @dircategory GNU Libraries
 @direntry
-* libgomp: (libgomp).                    GNU OpenMP runtime library
+* libgomp: (libgomp).          GNU Offloading and Multi Processing Runtime Library.
 @end direntry
 
-This manual documents the GNU implementation of the OpenMP API for 
-multi-platform shared-memory parallel programming in C/C++ and Fortran.
+This manual documents libgomp, the GNU Offloading and Multi Processing
+Runtime library.  This is the GNU implementation of the OpenMP and
+OpenACC APIs for parallel and accelerator programming in C/C++ and
+Fortran.
 
 Published by the Free Software Foundation
 51 Franklin Street, Fifth Floor
@@ -48,7 +50,8 @@ Boston, MA 02110-1301 USA
 @setchapternewpage odd
 
 @titlepage
-@title The GNU OpenMP Implementation
+@title GNU Offloading and Multi Processing Runtime Library
+@subtitle The GNU OpenMP and OpenACC Implementation
 @page
 @vskip 0pt plus 1filll
 @comment For the @value{version-GCC} Version*
@@ -69,9 +72,19 @@ Boston, MA 02110-1301, USA@*
 @top Introduction
 @cindex Introduction
 
-This manual documents the usage of libgomp, the GNU implementation of the 
-@uref{http://www.openmp.org, OpenMP} Application Programming Interface (API)
-for multi-platform shared-memory parallel programming in C/C++ and Fortran.
+This manual documents the usage of libgomp, the GNU Offloading and
+Multi Processing Runtime Library.  This includes the GNU
+implementation of the @uref{http://www.openmp.org, OpenMP} Application
+Programming Interface (API) for multi-platform shared-memory parallel
+programming in C/C++ and Fortran, and the GNU implementation of the
+@uref{http://www.openacc.org/, OpenACC} Application Programming
+Interface (API) for offloading of code to accelerator devices in C/C++
+and Fortran.
+
+Originally, libgomp implemented the GNU OpenMP Runtime Library.  Based
+on this, support for OpenACC and offloading (both OpenACC and OpenMP
+4's target construct) has been added later on, and the library's name
+changed to GNU Offloading and Multi Processing Runtime Library.
 
 
 
@@ -87,7 +100,8 @@ for multi-platform shared-memory parallel programming in C/C++ and Fortran.
 * Environment Variables::      Influencing runtime behavior with environment 
                                variables.
 * The libgomp ABI::            Notes on the external ABI presented by libgomp.
-* Reporting Bugs::             How to report bugs in GNU OpenMP.
+* Reporting Bugs::             How to report bugs in the GNU Offloading and
+                               Multi Processing Runtime Library.
 * Copying::                    GNU general public license says
                                how you can copy and share libgomp.
 * GNU Free Documentation License::
@@ -141,6 +155,7 @@ linkage, and do not throw exceptions.
 * omp_get_dynamic::             Dynamic teams setting
 * omp_get_level::               Number of parallel regions
 * omp_get_max_active_levels::   Maximum number of active regions
+* omp_get_max_task_priority::   Maximum task priority value that can be set
 * omp_get_max_threads::         Maximum number of threads of parallel region
 * omp_get_nested::              Nested parallel regions
 * omp_get_num_devices::         Number of target devices
@@ -374,6 +389,27 @@ This function obtains the maximum allowed number of nested, active parallel regi
 @end table
 
 
+@node omp_get_max_task_priority
+@section @code{omp_get_max_task_priority} -- Maximum priority value
+that can be set for tasks.
+@table @asis
+@item @emph{Description}:
+This function obtains the maximum allowed priority number for tasks.
+
+@item @emph{C/C++}
+@multitable @columnfractions .20 .80
+@item @emph{Prototype}: @tab @code{int omp_get_max_task_priority(void);}
+@end multitable
+
+@item @emph{Fortran}:
+@multitable @columnfractions .20 .80
+@item @emph{Interface}: @tab @code{integer function omp_get_max_task_priority()}
+@end multitable
+
+@item @emph{Reference}:
+@uref{http://www.openmp.org/, OpenMP specification v4.5}, Section 3.2.29.
+@end table
+
 
 @node omp_get_max_threads
 @section @code{omp_get_max_threads} -- Maximum number of threads of parallel region
@@ -567,18 +603,18 @@ set via @env{OMP_PROC_BIND}.  Possible values are @code{omp_proc_bind_false},
 Obtain the runtime scheduling method.  The @var{kind} argument will be
 set to the value @code{omp_sched_static}, @code{omp_sched_dynamic},
 @code{omp_sched_guided} or @code{omp_sched_auto}.  The second argument,
-@var{modifier}, is set to the chunk size.
+@var{chunk_size}, is set to the chunk size.
 
 @item @emph{C/C++}
 @multitable @columnfractions .20 .80
-@item @emph{Prototype}: @tab @code{void omp_get_schedule(omp_sched_t *kind, int *modifier);}
+@item @emph{Prototype}: @tab @code{void omp_get_schedule(omp_sched_t *kind, int *chunk_size);}
 @end multitable
 
 @item @emph{Fortran}:
 @multitable @columnfractions .20 .80
-@item @emph{Interface}: @tab @code{subroutine omp_get_schedule(kind, modifier)}
+@item @emph{Interface}: @tab @code{subroutine omp_get_schedule(kind, chunk_size)}
 @item                   @tab @code{integer(kind=omp_sched_kind) kind}
-@item                   @tab @code{integer modifier}
+@item                   @tab @code{integer chunk_size}
 @end multitable
 
 @item @emph{See also}:
@@ -915,19 +951,19 @@ Sets the runtime scheduling method.  The @var{kind} argument can have the
 value @code{omp_sched_static}, @code{omp_sched_dynamic},
 @code{omp_sched_guided} or @code{omp_sched_auto}.  Except for
 @code{omp_sched_auto}, the chunk size is set to the value of
-@var{modifier} if positive, or to the default value if zero or negative.
-For @code{omp_sched_auto} the @var{modifier} argument is ignored.
+@var{chunk_size} if positive, or to the default value if zero or negative.
+For @code{omp_sched_auto} the @var{chunk_size} argument is ignored.
 
 @item @emph{C/C++}
 @multitable @columnfractions .20 .80
-@item @emph{Prototype}: @tab @code{void omp_set_schedule(omp_sched_t kind, int modifier);}
+@item @emph{Prototype}: @tab @code{void omp_set_schedule(omp_sched_t kind, int chunk_size);}
 @end multitable
 
 @item @emph{Fortran}:
 @multitable @columnfractions .20 .80
-@item @emph{Interface}: @tab @code{subroutine omp_set_schedule(kind, modifier)}
+@item @emph{Interface}: @tab @code{subroutine omp_set_schedule(kind, chunk_size)}
 @item                   @tab @code{integer(kind=omp_sched_kind) kind}
-@item                   @tab @code{integer modifier}
+@item                   @tab @code{integer chunk_size}
 @end multitable
 
 @item @emph{See also}:
@@ -1292,22 +1328,25 @@ section 4 of the OpenMP specification in version 4.0, while those
 beginning with @env{GOMP_} are GNU extensions.
 
 @menu
-* OMP_CANCELLATION::      Set whether cancellation is activated
-* OMP_DISPLAY_ENV::       Show OpenMP version and environment variables
-* OMP_DEFAULT_DEVICE::    Set the device used in target regions
-* OMP_DYNAMIC::           Dynamic adjustment of threads
-* OMP_MAX_ACTIVE_LEVELS:: Set the maximum number of nested parallel regions
-* OMP_NESTED::            Nested parallel regions
-* OMP_NUM_THREADS::       Specifies the number of threads to use
-* OMP_PROC_BIND::         Whether theads may be moved between CPUs
-* OMP_PLACES::            Specifies on which CPUs the theads should be placed
-* OMP_STACKSIZE::         Set default thread stack size
-* OMP_SCHEDULE::          How threads are scheduled
-* OMP_THREAD_LIMIT::      Set the maximum number of threads
-* OMP_WAIT_POLICY::       How waiting threads are handled
-* GOMP_CPU_AFFINITY::     Bind threads to specific CPUs
-* GOMP_STACKSIZE::        Set default thread stack size
-* GOMP_SPINCOUNT::        Set the busy-wait spin count
+* OMP_CANCELLATION::        Set whether cancellation is activated
+* OMP_DISPLAY_ENV::         Show OpenMP version and environment variables
+* OMP_DEFAULT_DEVICE::      Set the device used in target regions
+* OMP_DYNAMIC::             Dynamic adjustment of threads
+* OMP_MAX_ACTIVE_LEVELS::   Set the maximum number of nested parallel regions
+* OMP_MAX_TASK_PRIORITY::   Set the maximum task priority value
+* OMP_NESTED::              Nested parallel regions
+* OMP_NUM_THREADS::         Specifies the number of threads to use
+* OMP_PROC_BIND::           Whether theads may be moved between CPUs
+* OMP_PLACES::              Specifies on which CPUs the theads should be placed
+* OMP_STACKSIZE::           Set default thread stack size
+* OMP_SCHEDULE::            How threads are scheduled
+* OMP_THREAD_LIMIT::        Set the maximum number of threads
+* OMP_WAIT_POLICY::         How waiting threads are handled
+* GOMP_CPU_AFFINITY::       Bind threads to specific CPUs
+* GOMP_DEBUG::              Enable debugging output
+* GOMP_STACKSIZE::          Set default thread stack size
+* GOMP_SPINCOUNT::          Set the busy-wait spin count
+* GOMP_RTEMS_THREAD_POOLS:: Set the RTEMS specific thread pools
 @end menu
 
 
@@ -1400,6 +1439,26 @@ If undefined, the number of active levels is unlimited.
 
 @item @emph{Reference}: 
 @uref{http://www.openmp.org/, OpenMP specification v4.0}, Section 4.9
+@end table
+
+
+
+@node OMP_MAX_TASK_PRIORITY
+@section @env{OMP_MAX_TASK_PRIORITY} -- Set the maximum priority
+number that can be set for a task.
+@cindex Environment Variable
+@table @asis
+@item @emph{Description}:
+Specifies the initial value for the maximum priority value that can be
+set for a task.  The value of this variable shall be a non-negative
+integer, and zero is allowed.  If undefined, the default priority is
+0.
+
+@item @emph{See also}:
+@ref{omp_get_max_task_priority}
+
+@item @emph{Reference}: 
+@uref{http://www.openmp.org/, OpenMP specification v4.5}, Section 4.14
 @end table
 
 
@@ -1607,7 +1666,7 @@ CPU 2, the fifth to CPU 4, the sixth through tenth to CPUs 6, 8, 10, 12,
 and 14 respectively and then start assigning back from the beginning of
 the list.  @code{GOMP_CPU_AFFINITY=0} binds all threads to CPU 0.
 
-There is no GNU OpenMP library routine to determine whether a CPU affinity 
+There is no libgomp library routine to determine whether a CPU affinity
 specification is in effect.  As a workaround, language-specific library 
 functions, e.g., @code{getenv} in C or @code{GET_ENVIRONMENT_VARIABLE} in 
 Fortran, may be used to query the setting of the @code{GOMP_CPU_AFFINITY} 
@@ -1621,6 +1680,20 @@ If both @env{GOMP_CPU_AFFINITY} and @env{OMP_PROC_BIND} are set,
 
 @item @emph{See also}:
 @ref{OMP_PLACES}, @ref{OMP_PROC_BIND}
+@end table
+
+
+
+@node GOMP_DEBUG
+@section @env{GOMP_DEBUG} -- Enable debugging output
+@cindex Environment Variable
+@table @asis
+@item @emph{Description}:
+Enable debugging output.  The variable should be set to @code{0}
+(disabled, also the default if not set), or @code{1} (enabled).
+
+If enabled, some debugging output will be printed during execution.
+This is currently not specified in more detail, and subject to change.
 @end table
 
 
@@ -1672,6 +1745,46 @@ or @env{OMP_WAIT_POLICY} is @code{PASSIVE}.
 
 @item @emph{See also}:
 @ref{OMP_WAIT_POLICY}
+@end table
+
+
+
+@node GOMP_RTEMS_THREAD_POOLS
+@section @env{GOMP_RTEMS_THREAD_POOLS} -- Set the RTEMS specific thread pools
+@cindex Environment Variable
+@cindex Implementation specific setting
+@table @asis
+@item @emph{Description}:
+This environment variable is only used on the RTEMS real-time operating system.
+It determines the scheduler instance specific thread pools.  The format for
+@env{GOMP_RTEMS_THREAD_POOLS} is a list of optional
+@code{<thread-pool-count>[$<priority>]@@<scheduler-name>} configurations
+separated by @code{:} where:
+@itemize @bullet
+@item @code{<thread-pool-count>} is the thread pool count for this scheduler
+instance.
+@item @code{$<priority>} is an optional priority for the worker threads of a
+thread pool according to @code{pthread_setschedparam}.  In case a priority
+value is omitted, then a worker thread will inherit the priority of the OpenMP
+master thread that created it.  The priority of the worker thread is not
+changed after creation, even if a new OpenMP master thread using the worker has
+a different priority.
+@item @code{@@<scheduler-name>} is the scheduler instance name according to the
+RTEMS application configuration.
+@end itemize
+In case no thread pool configuration is specified for a scheduler instance,
+then each OpenMP master thread of this scheduler instance will use its own
+dynamically allocated thread pool.  To limit the worker thread count of the
+thread pools, each OpenMP master thread must call @code{omp_set_num_threads}.
+@item @emph{Example}:
+Lets suppose we have three scheduler instances @code{IO}, @code{WRK0}, and
+@code{WRK1} with @env{GOMP_RTEMS_THREAD_POOLS} set to
+@code{"1@@WRK0:3$4@@WRK1"}.  Then there are no thread pool restrictions for
+scheduler instance @code{IO}.  In the scheduler instance @code{WRK0} there is
+one thread pool available.  Since no priority is specified for this scheduler
+instance, the worker thread inherits the priority of the OpenMP master thread
+that created it.  In the scheduler instance @code{WRK1} there are three thread
+pools available and their worker threads run at priority four.
 @end table
 
 
@@ -2066,15 +2179,16 @@ becomes
 
 
 @c ---------------------------------------------------------------------
-@c 
+@c Reporting Bugs
 @c ---------------------------------------------------------------------
 
 @node Reporting Bugs
 @chapter Reporting Bugs
 
-Bugs in the GNU OpenMP implementation should be reported via 
-@uref{http://gcc.gnu.org/bugzilla/, Bugzilla}.  For all cases, please add 
-"openmp" to the keywords field in the bug report.
+Bugs in the GNU Offloading and Multi Processing Runtime Library should
+be reported via @uref{http://gcc.gnu.org/bugzilla/, Bugzilla}.  Please add
+"openacc", or "openmp", or both to the keywords field in the bug
+report, as appropriate.
 
 
 

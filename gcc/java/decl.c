@@ -1,6 +1,6 @@
 /* Process declarations and variables for the GNU compiler for the
    Java(TM) language.
-   Copyright (C) 1996-2014 Free Software Foundation, Inc.
+   Copyright (C) 1996-2015 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -27,32 +27,18 @@ The Free Software Foundation is independent of Sun Microsystems, Inc.  */
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "target.h"
+#include "function.h"
 #include "tree.h"
-#include "stor-layout.h"
 #include "stringpool.h"
-#include "varasm.h"
+#include "cgraph.h"
 #include "diagnostic-core.h"
+#include "stor-layout.h"
+#include "varasm.h"
 #include "toplev.h"
-#include "flags.h"
 #include "java-tree.h"
 #include "jcf.h"
 #include "java-except.h"
-#include "ggc.h"
-#include "hash-map.h"
-#include "is-a.h"
-#include "plugin-api.h"
-#include "vec.h"
-#include "hashtab.h"
-#include "hash-set.h"
-#include "machmode.h"
-#include "tm.h"
-#include "hard-reg-set.h"
-#include "input.h"
-#include "function.h"
-#include "ipa-ref.h"
-#include "cgraph.h"
-#include "tree-inline.h"
-#include "target.h"
 #include "version.h"
 #include "tree-iterator.h"
 #include "langhooks.h"
@@ -1913,14 +1899,12 @@ java_mark_decl_local (tree decl)
 {
   DECL_EXTERNAL (decl) = 0;
 
-#ifdef ENABLE_CHECKING
   /* Double check that we didn't pass the function to the callgraph early.  */
-  if (TREE_CODE (decl) == FUNCTION_DECL)
+  if (flag_checking && TREE_CODE (decl) == FUNCTION_DECL)
     {
       struct cgraph_node *node = cgraph_node::get (decl);
       gcc_assert (!node || !node->definition);
     }
-#endif
   gcc_assert (!DECL_RTL_SET_P (decl));
 }
 
@@ -1964,11 +1948,7 @@ java_mark_class_local (tree klass)
 
   for (t = TYPE_FIELDS (klass); t ; t = DECL_CHAIN (t))
     if (FIELD_STATIC (t))
-      {
-	if (DECL_EXTERNAL (t))
-	  vec_safe_push (pending_static_fields, t);
-	java_mark_decl_local (t);
-      }
+      java_mark_decl_local (t);
 
   for (t = TYPE_METHODS (klass); t ; t = DECL_CHAIN (t))
     if (!METHOD_ABSTRACT (t))
